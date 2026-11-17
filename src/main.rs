@@ -1917,7 +1917,7 @@ impl IslandApp {
             tsz -= 1.0;
         }
         // 三个元素共用同一条垂直中线，保证歌名、连接符、歌手在同一水平线上
-        let title_cy = rect.top() + CONTENT_PAD_T + 41.0 - 20.0;
+        let title_cy = rect.top() + CONTENT_PAD_T + 41.0 - 10.0;
         painter.text(
             egui::pos2(tx, title_cy),
             egui::Align2::LEFT_CENTER,
@@ -1936,7 +1936,7 @@ impl IslandApp {
         let dur = self.duration_est();
         let pos = self.current_pos();
         let prog = if dur > 1.0 { (pos / dur).clamp(0.0, 1.0) as f32 } else { 0.0 };
-        let bar_y = rect.top() + CONTENT_PAD_T + 69.0 - 20.0;
+        let bar_y = rect.top() + CONTENT_PAD_T + 69.0 - 10.0;
         let bar = egui::Rect::from_min_max(egui::pos2(tx, bar_y), egui::pos2(cx1, bar_y + 3.0));
         painter.rect_filled(bar, 1.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 30));
         painter.rect_filled(egui::Rect::from_min_max(bar.min, egui::pos2(tx + bar.width() * prog, bar_y + 3.0)), 1.5, green);
@@ -1949,7 +1949,7 @@ impl IslandApp {
         painter.text(egui::pos2(cx1, bar_y + 6.0), egui::Align2::RIGHT_TOP, fmt(dur), egui::FontId::proportional(10.0), faint);
 
         // 控制按钮：上一首 / 播放(绿色大圆) / 下一首
-        let btn_y = rect.top() + CONTENT_PAD_T + 108.0 - 20.0;
+        let btn_y = rect.top() + CONTENT_PAD_T + 108.0 - 10.0;
         let mut clicked: Option<&str> = None;
         let prev_c = egui::pos2(tx + 14.0, btn_y);
         let rprev = egui::Rect::from_center_size(prev_c, egui::vec2(22.0, 22.0));
@@ -2027,8 +2027,8 @@ impl IslandApp {
         let lfont = 14.0f32;
         let line_font = egui::FontId::proportional(lfont);
         let row_h = 22.0f32;
-        let vtop = rect.top() + CONTENT_PAD_T + 146.0 - 20.0;
-        let vbot = rect.bottom() - CONTENT_PAD_B - 20.0;
+        let vtop = rect.top() + CONTENT_PAD_T + 146.0 - 10.0;
+        let vbot = rect.bottom() - CONTENT_PAD_B - 10.0;
         // 歌词与「圆盘+信息」共用同一条视觉中线：左边也去掉圆盘方框的透明留白。
         let lx0 = cx0 - disc_pad;
         let lyric_rect = egui::Rect::from_min_max(egui::pos2(lx0, vtop), egui::pos2(cx1, vbot));
