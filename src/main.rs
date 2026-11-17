@@ -297,6 +297,8 @@ struct Config {
     upd_seen_rail: String,
     /// 用户已点击过“软件更新”行的版本号（点过则行角标不再出现）
     upd_seen_row: String,
+    /// 最近一次「已是最新版本」检查的本地日期（yyyy-mm-dd）；当天不再允许重复检查
+    upd_checked_day: String,
 }
 
 impl Default for Config {
@@ -322,6 +324,7 @@ impl Default for Config {
             spectrum: true,
             upd_seen_rail: String::new(),
             upd_seen_row: String::new(),
+            upd_checked_day: String::new(),
         }
     }
 }
@@ -380,6 +383,7 @@ impl Config {
                     "spectrum" => cfg.spectrum = v == "1" || v == "true",
                     "upd_seen_rail" => cfg.upd_seen_rail = v.to_string(),
                     "upd_seen_row" => cfg.upd_seen_row = v.to_string(),
+                    "upd_checked_day" => cfg.upd_checked_day = v.to_string(),
                     _ => {}
                 }
             }
@@ -392,7 +396,7 @@ impl Config {
 
     fn save(&self) {
         let text = format!(
-            "# MyIsle 配置\nposition={}\nx_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\nupd_seen_rail={}\nupd_seen_row={}\n",
+            "# MyIsle 配置\nposition={}\nx_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\nupd_seen_rail={}\nupd_seen_row={}\nupd_checked_day={}\n",
             self.position.as_str(),
             self.x_frac,
             self.font,
@@ -415,6 +419,7 @@ impl Config {
             self.spectrum as u8,
             self.upd_seen_rail,
             self.upd_seen_row,
+            self.upd_checked_day,
         );
         let _ = std::fs::write(config_path(), text);
     }
@@ -809,6 +814,8 @@ struct IslandApp {
     upd_last_check: Instant,
     upd_rx: Option<std::sync::mpsc::Receiver<Result<Option<update::Manifest>, String>>>,
     upd_inst_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    /// 下载进度百分比（后台线程写、UI 只读）
+    upd_dl_pct: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl IslandApp {
@@ -946,6 +953,7 @@ impl IslandApp {
             upd_last_check: Instant::now() - Duration::from_secs(5 * 3600),
             upd_rx: None,
             upd_inst_rx: None,
+            upd_dl_pct: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
     
     
         }
@@ -2501,6 +2509,10 @@ impl IslandApp {
         if self.upd_checking || self.upd_busy {
             return;
         }
+        // 当天已确认是最新版本时不再重复检查（第二天恢复）
+        if self.cfg.upd_checked_day == update::today_local() && self.upd_ver.is_none() {
+            return;
+        }
         self.upd_checking = true;
         self.upd_msg = "检查中…".to_string();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -2510,7 +2522,7 @@ impl IslandApp {
         self.upd_rx = Some(rx);
     }
 
-    /// 后台下载更新包并在校验通过后启动安装器。
+    /// 后台下载更新包（带进度），完成后自动启动静默安装器。
     fn start_update_install(&mut self) {
         use update::Manifest;
         let m: Manifest = match &self.upd_ver {
@@ -2521,10 +2533,20 @@ impl IslandApp {
             return;
         }
         self.upd_busy = true;
+        self.upd_dl_pct = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
         self.upd_msg = format!("正在下载 v{}…", m.version);
+        let pct = self.upd_dl_pct.clone();
         let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
         std::thread::spawn(move || {
-            let r = update::download_setup(&m).and_then(|p| update::run_setup(&p));
+            let r = update::download_setup_with_progress(&m, pct.clone()).and_then(|p| {
+                // 先让「正在安装」状态有机会绘制，再拉起静默安装器
+                std::thread::sleep(Duration::from_millis(700));
+                // 标记今天已检查，重启后的新版界面直接显示「已是最新版本」
+                let mut cfg = Config::load();
+                cfg.upd_checked_day = update::today_local();
+                cfg.save();
+                update::run_setup(&p)
+            });
             let _ = tx.send(r);
         });
         self.upd_inst_rx = Some(rx);
@@ -2552,6 +2574,8 @@ impl IslandApp {
                 Ok(None) => {
                     self.upd_ver = None;
                     self.upd_msg = "已是最新版本".to_string();
+                    self.cfg.upd_checked_day = update::today_local();
+                    self.cfg.save();
                 }
                 Err(e) => {
                     self.upd_msg = format!("检查失败：{}", e);
@@ -2568,8 +2592,12 @@ impl IslandApp {
                 }
             }
         }
-        // 启动后 5s 首查，之后每 4 小时
-        if self.upd_rx.is_none() && !self.upd_checking && self.upd_last_check.elapsed() > Duration::from_secs(4 * 3600) {
+        // 启动后 5s 首查，之后每 4 小时；当天已确认最新则不再自动查
+        if self.upd_rx.is_none()
+            && !self.upd_checking
+            && self.upd_last_check.elapsed() > Duration::from_secs(4 * 3600)
+            && self.cfg.upd_checked_day != update::today_local()
+        {
             self.start_update_check();
         }
     }
@@ -2660,57 +2688,65 @@ impl IslandApp {
         row_label(painter, y, "软件更新", ink);
         {
             let up_row = egui::Rect::from_min_max(
-                egui::pos2(right - 168.0, y + 3.0),
+                egui::pos2(right - 220.0, y + 3.0),
                 egui::pos2(right, y + row_h - 3.0),
             );
-            let resp = ui.interact(up_row, ui.id().with("upd_row"), egui::Sense::click())
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            let (txt, col) = if self.upd_busy {
-                (self.upd_msg.clone(), accent)
+            let today = update::today_local();
+            let checked_today = self.cfg.upd_checked_day == today;
+            let ver = self.upd_ver.as_ref().map(|m| m.version.clone()).unwrap_or_default();
+            let pct = self.upd_dl_pct.load(std::sync::atomic::Ordering::Relaxed);
+            let (txt, col, green, show_dot, progress, enabled) = if self.upd_busy {
+                if pct >= 100 {
+                    (format!("v{} · 正在安装 v{}…", update::VERSION, ver), accent, true, false, Some(100u8), false)
+                } else {
+                    (format!("v{} · 正在下载 v{}… {}%", update::VERSION, ver, pct), accent, true, false, Some(pct), false)
+                }
             } else if let Some(m) = &self.upd_ver {
-                (format!("发现新版本 v{} ›", m.version), accent)
+                (
+                    format!("v{} · 更新 (v{})", update::VERSION, m.version),
+                    accent,
+                    true,
+                    self.show_row_update(),
+                    None,
+                    true,
+                )
             } else if self.upd_checking {
-                ("检查中…".to_string(), muted2)
+                (format!("v{} · 检查中…", update::VERSION), muted2, false, false, None, false)
             } else if self.upd_msg.contains("失败") {
-                (self.upd_msg.clone(), egui::Color32::from_rgba_unmultiplied(230, 120, 120, a))
+                (self.upd_msg.clone(), egui::Color32::from_rgba_unmultiplied(230, 120, 120, a), false, false, None, true)
+            } else if checked_today {
+                (format!("v{} · 已是最新版本", update::VERSION), muted2, false, false, None, false)
             } else {
-                (format!("v{} · 检查更新", update::VERSION), muted2)
+                (format!("v{} · 检查更新", update::VERSION), muted2, false, false, None, true)
             };
             let font = egui::FontId::proportional(11.5);
-            if !self.upd_busy && self.upd_ver.is_some() {
-                // 中文标签与版本号分开绘制并按垂直中心对齐，避免中英文字形基线不同造成“上下错位”
-                let m = self.upd_ver.as_ref().unwrap();
-                let version = format!("v{} ›", m.version);
-                let vfont = egui::FontId::proportional(13.0);
-                let vw = painter
-                    .layout_no_wrap(version.clone(), vfont.clone(), accent)
-                    .size()
-                    .x;
-                painter.text(
-                    egui::pos2(right, y + row_h * 0.5 + 8.0),
-                    egui::Align2::RIGHT_BOTTOM,
-                    version,
-                    vfont,
-                    accent,
+            // 统一排版：版本号、圆点、文案同一字号、同一基线（与「v0.2.1 · 检查更新」预览一致）
+            painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, font, col);
+            if green {
+                // 绿色状态仅在整行文字上体现；小圆点固定在文字右上角，留在面板内
+                if show_dot {
+                    painter.circle_filled(egui::pos2(right - 3.0, y + row_h * 0.5 - 8.0), 3.0, accent);
+                }
+            }
+            if let Some(p) = progress {
+                let bar = egui::Rect::from_min_max(
+                    egui::pos2(up_row.left() + 4.0, y + row_h - 5.0),
+                    egui::pos2(up_row.right(), y + row_h - 2.0),
                 );
-                painter.text(
-                    egui::pos2(right - vw - 5.0, y + row_h * 0.5 + 8.0),
-                    egui::Align2::RIGHT_BOTTOM,
-                    "发现新版本",
-                    font,
-                    accent,
+                painter.rect_filled(bar, 1.5, egui::Color32::from_rgba_unmultiplied(42, 58, 52, a));
+                let fill = egui::Rect::from_min_max(
+                    bar.left_top(),
+                    egui::pos2(bar.left() + bar.width() * p as f32 / 100.0, bar.bottom()),
                 );
+                painter.rect_filled(fill, 1.5, accent);
+            }
+            let resp = ui.interact(up_row, ui.id().with("upd_row"), egui::Sense::click());
+            let resp = if enabled {
+                resp.on_hover_cursor(egui::CursorIcon::PointingHand)
             } else {
-                painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, font, col);
-            }
-            if self.show_row_update() {
-                painter.circle_filled(
-                    egui::pos2(right - 4.0, y + row_h * 0.5 - 8.0),
-                    3.0,
-                    accent,
-                );
-            }
-            if resp.clicked() {
+                resp
+            };
+            if enabled && resp.clicked() {
                 self.mark_upd_seen_row();
                 if self.upd_ver.is_some() {
                     self.start_update_install();
@@ -3564,6 +3600,8 @@ impl eframe::App for IslandApp {
             || self.dragging
             || self.settle.is_some()
             || self.upd_ver.is_some()
+            || self.upd_checking
+            || self.upd_busy
             || pointer_active;
         let ms = if animating { 16 } else { 200 };
         if std::env::var_os("MYISLE_PERF").is_some() {

@@ -10,8 +10,10 @@
 //!   "sha256":"...", "size":12345678, "mandatory":false, "pub_date":"2026-11-20" }
 
 use serde_json::Value;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -46,6 +48,38 @@ pub fn manifest_url() -> Option<String> {
         }
     }
     repo_slug().map(|r| format!("https://github.com/{}/releases/latest/download/latest.json", r))
+}
+
+/// 本地日期（yyyy-mm-dd），用于「当天已检查过」的节流。
+pub fn today_local() -> String {
+    #[repr(C)]
+    struct SystemTimeLocal {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        milliseconds: u16,
+    }
+    extern "system" {
+        fn GetLocalTime(lp_system_time: *mut SystemTimeLocal);
+    }
+    let mut st = SystemTimeLocal {
+        year: 0,
+        month: 0,
+        day_of_week: 0,
+        day: 0,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        milliseconds: 0,
+    };
+    unsafe {
+        GetLocalTime(&mut st);
+    }
+    format!("{:04}-{:02}-{:02}", st.year, st.month, st.day)
 }
 
 fn read_text(url: &str) -> Result<String, String> {
@@ -162,6 +196,69 @@ fn download(url: &str, dest: &Path) -> Result<(), String> {
     let mut f = std::fs::File::create(dest).map_err(|e| e.to_string())?;
     std::io::copy(&mut r, &mut f).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 带进度回调的下载（百分比 0..100）。
+fn download_with_progress(url: &str, dest: &Path, pct: &AtomicU8) -> Result<(), String> {
+    if let Some(p) = url.strip_prefix("file://") {
+        std::fs::copy(p, dest).map_err(|e| e.to_string())?;
+        pct.store(100, Ordering::Relaxed);
+        return Ok(());
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(120))
+        .build();
+    let resp = agent.get(url).call().map_err(|e| e.to_string())?;
+    let total: Option<u64> = resp
+        .header("Content-Length")
+        .and_then(|s| s.parse::<u64>().ok());
+    let mut r = resp.into_reader();
+    let mut f = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 64 * 1024];
+    let mut got: u64 = 0;
+    loop {
+        let n = r.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        f.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        got += n as u64;
+        if let Some(t) = total {
+            if t > 0 {
+                let p = ((got.saturating_mul(100) / t).min(99)) as u8;
+                pct.store(p, Ordering::Relaxed);
+            }
+        }
+    }
+    let _ = f.flush();
+    pct.store(100, Ordering::Relaxed);
+    Ok(())
+}
+
+/// 下载并校验，期间通过 `pct` 报告 0..100 百分比。
+pub fn download_setup_with_progress(m: &Manifest, pct: Arc<AtomicU8>) -> Result<PathBuf, String> {
+    if m.url.trim().is_empty() {
+        return Err("清单缺少下载地址".into());
+    }
+    let name = m
+        .url
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .filter(|s| s.to_lowercase().ends_with(".exe"))
+        .unwrap_or("MyIsle-Setup.exe");
+    let dest = upd_dir().join(format!("{}-{}", m.version, name));
+    let tmp = dest.with_extension("part");
+    download_with_progress(&m.url, &tmp, &pct)?;
+    if !m.sha256.trim().is_empty() {
+        let got = sha256_file(&tmp)?;
+        if got != m.sha256.trim().to_lowercase() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("SHA256 不匹配（下载 {}）", &got[..8.min(got.len())]));
+        }
+    }
+    std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    Ok(dest)
 }
 
 /// 下载安装包并校验；成功返回本地路径。`sha256` 为空时跳过校验（仅测试用）。
