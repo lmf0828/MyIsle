@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$Version = "",
     [string]$Repo = ""
 )
@@ -21,6 +21,9 @@ if (-not $Repo) { $Repo = 'lmf0828/MyIsle' }
 if ($Version) { & "$PSScriptRoot\set_version.ps1" -Version $Version }
 $v = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
 Write-Host "packing v$v"
+
+# Embed the repo slug so release builds can find GitHub latest.json at runtime.
+$env:MYISLE_REPO = $Repo
 
 cargo build --release
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
