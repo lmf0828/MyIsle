@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Version = "",
     [string]$Repo = ""
 )
@@ -25,8 +25,11 @@ Write-Host "packing v$v"
 # Embed the repo slug so release builds can find GitHub latest.json at runtime.
 $env:MYISLE_REPO = $Repo
 
-cargo build --release
-if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+$ErrorActionPreference = 'Continue'
+cmd /c "cargo build --release 2>&1"
+$code = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($code -ne 0) { throw "cargo build failed" }
 
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force $dist | Out-Null

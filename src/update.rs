@@ -119,6 +119,77 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
     })
 }
 
+fn check_via_api(repo: &str) -> Result<Option<Manifest>, String> {
+    let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(10))
+        .build();
+    let resp = agent
+        .get(&url)
+        .set("User-Agent", "MyIsle-Update")
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| e.to_string())?;
+    let mut s = String::new();
+    resp.into_reader()
+        .take(512 * 1024)
+        .read_to_string(&mut s)
+        .map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+    let version = v
+        .get("tag_name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches('v')
+        .to_string();
+    if version.is_empty() {
+        return Err("release 缺少 tag_name".into());
+    }
+    let wanted = format!("MyIsle-Setup-{}.exe", version);
+    let assets = v.get("assets").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let mut chosen = None;
+    for a in &assets {
+        let name = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
+        if name.eq_ignore_ascii_case(&wanted) {
+            chosen = Some(a.clone());
+            break;
+        }
+    }
+    if chosen.is_none() {
+        for a in &assets {
+            let name = a.get("name").and_then(|x| x.as_str()).unwrap_or("").to_lowercase();
+            if name.starts_with("myisle-setup-") && name.ends_with(".exe") {
+                chosen = Some(a.clone());
+                break;
+            }
+        }
+    }
+    let a = match chosen {
+        Some(a) => a,
+        None => return Err("release 中没有 MyIsle-Setup-*.exe".into()),
+    };
+    let id = a.get("id").and_then(|x| x.as_u64()).ok_or("asset 缺少 id")?;
+    let size = a.get("size").and_then(|x| x.as_u64()).unwrap_or(0);
+    let digest = a.get("digest").and_then(|x| x.as_str()).unwrap_or("");
+    let sha = digest.trim_start_matches("sha256:").to_string();
+    let notes = v
+        .get("body")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("name").and_then(|x| x.as_str()))
+        .unwrap_or("")
+        .to_string();
+    Ok(Some(Manifest {
+        version,
+        notes,
+        url: format!("https://api.github.com/repos/{}/releases/assets/{}", repo, id),
+        sha256: sha,
+        size,
+        mandatory: false,
+    }))
+}
+
 fn ver_key(v: &str) -> Vec<u64> {
     v.trim()
         .trim_start_matches('v')
@@ -146,15 +217,23 @@ pub fn is_newer(a: &str, b: &str) -> bool {
 /// 同步检查更新。返回 Ok(Some(m)) 表示有比当前更新的版本；
 /// Ok(None) 表示已是最新（或未配置更新源）；Err 表示网络/格式错误。
 pub fn check() -> Result<Option<Manifest>, String> {
-    let url = match manifest_url() {
-        Some(u) => u,
+    // Explicit override (local file / custom URL) keeps the manifest path.
+    if let Ok(u) = std::env::var("MYISLE_UPDATE_URL") {
+        let u = u.trim().to_string();
+        if !u.is_empty() {
+            let m = parse_manifest(&read_text(&u)?)?;
+            return if is_newer(&m.version, VERSION) { Ok(Some(m)) } else { Ok(None) };
+        }
+    }
+    // Default: GitHub REST API. This also works where github.com itself is
+    // unreachable but api.github.com is available.
+    let m = match repo_slug() {
+        Some(repo) => check_via_api(&repo)?,
         None => return Ok(None),
     };
-    let m = parse_manifest(&read_text(&url)?)?;
-    if is_newer(&m.version, VERSION) {
-        Ok(Some(m))
-    } else {
-        Ok(None)
+    match m {
+        Some(m) if is_newer(&m.version, VERSION) => Ok(Some(m)),
+        _ => Ok(None),
     }
 }
 
@@ -191,7 +270,12 @@ fn download(url: &str, dest: &Path) -> Result<(), String> {
         .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(60))
         .build();
-    let resp = agent.get(url).call().map_err(|e| e.to_string())?;
+    let resp = agent
+        .get(url)
+        .set("User-Agent", "MyIsle-Update")
+        .set("Accept", "application/octet-stream")
+        .call()
+        .map_err(|e| e.to_string())?;
     let mut r = resp.into_reader();
     let mut f = std::fs::File::create(dest).map_err(|e| e.to_string())?;
     std::io::copy(&mut r, &mut f).map_err(|e| e.to_string())?;
@@ -209,7 +293,12 @@ fn download_with_progress(url: &str, dest: &Path, pct: &AtomicU8) -> Result<(), 
         .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(120))
         .build();
-    let resp = agent.get(url).call().map_err(|e| e.to_string())?;
+    let resp = agent
+        .get(url)
+        .set("User-Agent", "MyIsle-Update")
+        .set("Accept", "application/octet-stream")
+        .call()
+        .map_err(|e| e.to_string())?;
     let total: Option<u64> = resp
         .header("Content-Length")
         .and_then(|s| s.parse::<u64>().ok());
@@ -344,6 +433,32 @@ mod tests {
     #[test]
     fn parse_missing_version() {
         assert!(parse_manifest(r#"{"notes":"x"}"#).is_err());
+    }
+
+    #[test]
+    #[ignore]
+    fn probe_api_env() {
+        match check() {
+            Ok(Some(m)) => println!(
+                "API_UPDATE version={} size={} sha={} url={}",
+                m.version, m.size, m.sha256, m.url
+            ),
+            Ok(None) => println!("API_NO_UPDATE (current {VERSION})"),
+            Err(e) => println!("API_ERR {e}"),
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn probe_download_api_env() {
+        match check() {
+            Ok(Some(m)) => match download_setup(&m) {
+                Ok(p) => println!("API_DOWNLOAD ok {} bytes {}", p.display(), p.metadata().map(|x| x.len()).unwrap_or(0)),
+                Err(e) => println!("API_DOWNLOAD_ERR {e}"),
+            },
+            Ok(None) => println!("API_NO_UPDATE"),
+            Err(e) => println!("API_ERR {e}"),
+        }
     }
 
     #[test]
