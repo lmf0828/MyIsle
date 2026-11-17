@@ -120,6 +120,7 @@ cargo build --release
 ---
 
 ## 发布与自动更新（2026-11 起）
+- 有更新时：展开态内容区右上角显示「发现新版本 vX · 立即更新」胶囊，点击即下载并静默安装重启；收起态右端显示一个小绿点提示。
 
 - **本地打包**：`powershell -ExecutionPolicy Bypass -File scripts\pack.ps1 -Version 0.2.0 -Repo owner/repo`
   - 产物在 `dist\`：`LingDao-<ver>-portable.zip`、`LingDao-Setup-<ver>.exe`（需安装 Inno Setup 6）、`latest.json`。

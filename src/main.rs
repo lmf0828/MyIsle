@@ -1531,6 +1531,14 @@ impl IslandApp {
                     col,
                 );
             }
+            // 有新版本时，收起态右端显示一个小绿点（不打扰，但能看见）
+            if self.upd_ver.is_some() {
+                painter.circle_filled(
+                    egui::pos2(pill.right() - 6.0, pill.center().y),
+                    2.6,
+                    egui::Color32::from_rgba_unmultiplied(52, 211, 153, 210),
+                );
+            }
         } else {
             self.draw_expanded_panel(ui, &painter, pill, e, t);
         }
@@ -2191,6 +2199,46 @@ impl IslandApp {
             let mask = egui::Color32::from_rgba_unmultiplied(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2], ma);
             let rr = self.cfg.radius.min(content.height() * 0.5);
             painter.with_clip_rect(content).rect_filled(content, rr, mask);
+        }
+        // 发现新版本：内容区右上角悬浮一条「发现新版本 vX · 立即更新」小胶囊，点击即下载并安装
+        if !self.show_settings && self.music_amt > 0.5 {
+            if let Some(ver) = self.upd_ver.as_ref().map(|m| m.version.clone()) {
+                let bh = 26.0f32;
+                let bw = if self.upd_busy { 168.0 } else { 214.0 };
+                let br = egui::Rect::from_min_size(
+                    egui::pos2(content.right() - CONTENT_PAD_X - bw, content.top() + 9.0),
+                    egui::vec2(bw, bh),
+                );
+                painter.rect_filled(br, bh * 0.5, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 26));
+                painter.circle_filled(egui::pos2(br.left() + 13.0, br.center().y), 3.2, accent);
+                let label = if self.upd_busy {
+                    format!("正在下载 v{}…", ver)
+                } else {
+                    format!("发现新版本 v{}", ver)
+                };
+                painter.text(
+                    egui::pos2(br.left() + 23.0, br.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    label,
+                    egui::FontId::proportional(11.5),
+                    accent,
+                );
+                if !self.upd_busy {
+                    painter.text(
+                        egui::pos2(br.right() - 12.0, br.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        "立即更新 ›",
+                        egui::FontId::proportional(11.5),
+                        accent,
+                    );
+                }
+                let resp = ui
+                    .interact(br, ui.id().with("upd_banner"), egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if resp.clicked() && !self.upd_busy {
+                    self.start_update_install();
+                }
+            }
         }
     }
 
