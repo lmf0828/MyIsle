@@ -1679,6 +1679,21 @@ impl IslandApp {
         galley.size().x
     }
 
+    /// 歌词上下边缘做柔和淡出（而不是硬裁剪）。返回按行中心到上下边界距离衰减后的颜色。
+    fn fade_lyric_color(&self, base: egui::Color32, y_center: f32, rect: egui::Rect) -> egui::Color32 {
+        let fade = 34.0f32;
+        let d = (y_center - rect.top()).min(rect.bottom() - y_center).max(0.0);
+        let t = (d / fade).clamp(0.0, 1.0);
+        // smoothstep，让消失更自然
+        let s = t * t * (3.0 - 2.0 * t);
+        egui::Color32::from_rgba_unmultiplied(
+            base.r(),
+            base.g(),
+            base.b(),
+            (base.a() as f32 * s) as u8,
+        )
+    }
+
     fn draw_lyric_line(
         &self,
         painter: &egui::Painter,
@@ -2110,6 +2125,7 @@ impl IslandApp {
                     continue;
                 }
                 let lrect = egui::Rect::from_min_size(egui::pos2(lx0, y), egui::vec2(cx1 - lx0, row_h));
+                let row_cy = y + row_h * 0.5;
                 // 当前句的逐字渐绿/进度始终随歌正常渲染，不受滚动/回位动画影响
                 let at_current = i == ci;
                 if at_current {
@@ -2117,9 +2133,36 @@ impl IslandApp {
                     let lt = (self.lyric_time() - self.lyr_lines[i].t).max(0.0);
                     let gdim = egui::Color32::from_rgba_unmultiplied(120, 170, 150, a);
                     let fill = if self.cfg.char_green { green } else { gdim };
+                    let gdim = self.fade_lyric_color(gdim, row_cy, lyric_rect);
+                    let fill = self.fade_lyric_color(fill, row_cy, lyric_rect);
                     self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), gdim, fill, pr, lt);
                 } else {
-                    self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), faint, faint, 0.0, t);
+                    let fc = self.fade_lyric_color(faint, row_cy, lyric_rect);
+                    self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), fc, fc, 0.0, t);
+                }
+            }
+            // 上下边缘用背景色做柔和渐变遮罩：避免歌词在边界被“一刀切”地截断。
+            {
+                let fade = 26.0f32;
+                let steps = 20usize;
+                let bg = egui::Color32::from_rgb(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2]);
+                let step_h = fade / steps as f32;
+                for k in 0..steps {
+                    let t = (k as f32 + 0.5) / steps as f32;
+                    let a_top = (255.0 * (1.0 - t) * (a as f32) / 255.0) as u8;
+                    let y0 = lyric_rect.top() + k as f32 * step_h;
+                    let r = egui::Rect::from_min_max(
+                        egui::pos2(lyric_rect.left(), y0),
+                        egui::pos2(lyric_rect.right(), y0 + step_h),
+                    );
+                    painter.rect_filled(r, 0.0, egui::Color32::from_rgba_unmultiplied(bg.r(), bg.g(), bg.b(), a_top));
+                    let a_bot = (255.0 * t * (a as f32) / 255.0) as u8;
+                    let y1 = lyric_rect.bottom() - (k as f32 + 1.0) * step_h;
+                    let r2 = egui::Rect::from_min_max(
+                        egui::pos2(lyric_rect.left(), y1),
+                        egui::pos2(lyric_rect.right(), y1 + step_h),
+                    );
+                    painter.rect_filled(r2, 0.0, egui::Color32::from_rgba_unmultiplied(bg.r(), bg.g(), bg.b(), a_bot));
                 }
             }
         } else {
