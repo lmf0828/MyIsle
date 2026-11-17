@@ -1,5 +1,10 @@
 # i岛 LingDao · Windows 灵动岛
 
+[![Release](https://img.shields.io/github/v/release/lmf0828/MyIsle?display_name=tag&sort=semver)](https://github.com/lmf0828/MyIsle/releases/latest)
+[![License](https://img.shields.io/github/license/lmf0828/MyIsle)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
+![Rust](https://img.shields.io/badge/language-Rust-orange)
+
 **i岛**是一个原创开源项目：使用 **Rust + egui/eframe 0.31**（glow/OpenGL 后端）从零实现的 Windows 顶部灵动岛桌面音乐伴侣——无 Electron、无 MSVC 依赖，单文件轻量运行。
 
 支持系统级媒体信息（Windows SMTC）、网易云音乐 / 汽水音乐实时歌词、逐字卡拉 OK 高亮、毛玻璃展开/收起动画与桌面托盘控制。
