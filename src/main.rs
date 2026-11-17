@@ -1570,7 +1570,7 @@ impl IslandApp {
                     self.draw_marquee(&painter, text_rect, &text, egui::FontId::proportional(14.0), fg, t);
                 }
                 // 右侧时间
-                let upd_pad = if self.upd_ver.is_some() { 22.0 } else { 0.0 };
+                let upd_pad = if self.upd_ver.is_some() { 16.0 } else { 0.0 };
                 time_rect = Some(painter.text(
                     egui::pos2(pill.right() - 13.0 - upd_pad, cy),
                     egui::Align2::RIGHT_CENTER,
@@ -1598,9 +1598,9 @@ impl IslandApp {
             // 有新版本时，紧跟时间右侧显示一个小绿点（不打扰，但一眼能看到）
             if self.upd_ver.is_some() {
                 let bp = time_rect
-                    .map(|r| egui::pos2(r.right() + 16.0, r.center().y))
+                    .map(|r| egui::pos2(r.right() + 12.0, r.center().y))
                     .unwrap_or_else(|| egui::pos2(pill.center().x + 52.0, pill.center().y));
-                self.paint_update_mark(&painter, bp, 18.0);
+                self.paint_update_mark(&painter, bp, 13.0, true);
             }
         } else {
             self.draw_expanded_panel(ui, &painter, pill, e, t);
@@ -1681,37 +1681,28 @@ impl IslandApp {
     }
 
     /// 有新版本时的小徽标：薄荷绿描边圆角小方块 + 向上箭头（不要文字，避免像状态灯）。
-    fn paint_update_mark(&self, painter: &egui::Painter, center: egui::Pos2, h: f32) {
-        let rect = egui::Rect::from_center_size(center, egui::vec2(h, h));
-        let cr = egui::CornerRadius::same((h * 0.5) as u8);
-        painter.rect_filled(
-            rect,
-            cr,
-            egui::Color32::from_rgba_unmultiplied(52, 211, 153, 34),
-        );
-        painter.rect_stroke(
-            rect,
-            cr,
-            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 120)),
-            egui::StrokeKind::Inside,
-        );
-        let col = egui::Color32::from_rgb(125, 240, 187);
-        let s = h * 0.24;
-        let (cx, cy) = (center.x, center.y);
-        painter.add(egui::Shape::line(
-            vec![
-                egui::pos2(cx - s, cy + s * 0.25),
-                egui::pos2(cx, cy - s * 0.85),
-                egui::pos2(cx + s, cy + s * 0.25),
-            ],
-            egui::Stroke::new((h * 0.09).max(1.2), col),
-        ));
-        painter.line_segment(
-            [
-                egui::pos2(cx, cy - s * 0.35),
-                egui::pos2(cx, cy + s * 0.95),
-            ],
-            egui::Stroke::new((h * 0.09).max(1.2), col),
+    fn paint_update_mark(
+        &self,
+        painter: &egui::Painter,
+        center: egui::Pos2,
+        size: f32,
+        animate: bool,
+    ) {
+        /// 使用系统图标组件库（Segoe MDL2 Assets）的「↑」字形，不手绘图标。
+        let t = painter.ctx().input(|i| i.time) as f32;
+        let wave = 0.5 + 0.5 * (t * 2.6).sin();
+        let (alpha, bob) = if animate {
+            ((150.0 + 105.0 * wave) as u8, -1.6 * wave)
+        } else {
+            (235, 0.0)
+        };
+        let col = egui::Color32::from_rgba_unmultiplied(125, 240, 187, alpha);
+        painter.text(
+            egui::pos2(center.x, center.y + bob),
+            egui::Align2::CENTER_CENTER,
+            "\u{E74A}", // Segoe MDL2 Assets: Up
+            icon_font(size),
+            col,
         );
     }
 
@@ -2292,7 +2283,7 @@ impl IslandApp {
             // 有新版本：设置菜单右上角一个小绿点，提示里面有更新
             if self.upd_ver.is_some() {
                 let bc = egui::pos2(item.right() - 9.0, item.top() + 9.0);
-                self.paint_update_mark(&painter, bc, 14.0);
+                self.paint_update_mark(&painter, bc, 11.0, false);
             }
         }
 
@@ -2345,46 +2336,6 @@ impl IslandApp {
             let mask = egui::Color32::from_rgba_unmultiplied(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2], ma);
             let rr = self.cfg.radius.min(content.height() * 0.5);
             painter.with_clip_rect(content).rect_filled(content, rr, mask);
-        }
-        // 发现新版本：内容区右上角悬浮一条「发现新版本 vX · 立即更新」小胶囊，点击即下载并安装
-        if !self.show_settings && self.music_amt > 0.5 {
-            if let Some(ver) = self.upd_ver.as_ref().map(|m| m.version.clone()) {
-                let bh = 26.0f32;
-                let bw = if self.upd_busy { 168.0 } else { 214.0 };
-                let br = egui::Rect::from_min_size(
-                    egui::pos2(content.right() - CONTENT_PAD_X - bw, content.top() + 9.0),
-                    egui::vec2(bw, bh),
-                );
-                painter.rect_filled(br, bh * 0.5, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 26));
-                painter.circle_filled(egui::pos2(br.left() + 13.0, br.center().y), 3.2, accent);
-                let label = if self.upd_busy {
-                    format!("正在下载 v{}…", ver)
-                } else {
-                    format!("发现新版本 v{}", ver)
-                };
-                painter.text(
-                    egui::pos2(br.left() + 23.0, br.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    label,
-                    egui::FontId::proportional(11.5),
-                    accent,
-                );
-                if !self.upd_busy {
-                    painter.text(
-                        egui::pos2(br.right() - 12.0, br.center().y),
-                        egui::Align2::RIGHT_CENTER,
-                        "立即更新 ›",
-                        egui::FontId::proportional(11.5),
-                        accent,
-                    );
-                }
-                let resp = ui
-                    .interact(br, ui.id().with("upd_banner"), egui::Sense::click())
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                if resp.clicked() && !self.upd_busy {
-                    self.start_update_install();
-                }
-            }
         }
     }
 
@@ -3442,6 +3393,7 @@ impl eframe::App for IslandApp {
             || self.music_amt > 0.01
             || self.dragging
             || self.settle.is_some()
+            || self.upd_ver.is_some()
             || pointer_active;
         let ms = if animating { 16 } else { 200 };
         if std::env::var_os("MYISLE_PERF").is_some() {
