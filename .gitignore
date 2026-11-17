@@ -10,8 +10,9 @@
 # local exe copies
 /MyIsle.exe
 
-# 本地工具/素材，不参与发布
+# 鏈湴宸ュ叿/绱犳潗锛屼笉鍙備笌鍙戝竷
 /NeteaseCloudMusicApi
 /bili_motuan
 /motuan_face
 /refs
+/data_uitest
