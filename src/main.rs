@@ -24,8 +24,8 @@ use tray::{Tray, TrayAction};
 // 收起?/ 展开态的窗口尺寸（逻辑点）
 const W_COLLAPSED: f32 = 150.0;
 const W_COLLAPSED_MUSIC: f32 = 356.0;
-const UPD_BADGE_W: f32 = 36.0;
-const UPD_BADGE_H: f32 = 13.8;
+const UPD_BADGE_W: f32 = 40.0;
+const UPD_BADGE_H: f32 = 15.3;
 const UPD_BADGE_GAP: f32 = 8.0;
 const H_COLLAPSED: f32 = 30.0;
 const W_EXPANDED: f32 = 520.0;
@@ -293,6 +293,10 @@ struct Config {
     lyric_font: f32,
     /// 收起态频谱动画开关
     spectrum: bool,
+    /// 用户已在设置菜单看过更新的版本号（看过则收起态/设置角标不再出现）
+    upd_seen_rail: String,
+    /// 用户已点击过“软件更新”行的版本号（点过则行角标不再出现）
+    upd_seen_row: String,
 }
 
 impl Default for Config {
@@ -316,6 +320,8 @@ impl Default for Config {
             marquee: true,
             lyric_font: 13.0,
             spectrum: true,
+            upd_seen_rail: String::new(),
+            upd_seen_row: String::new(),
         }
     }
 }
@@ -372,6 +378,8 @@ impl Config {
                     "marquee" => cfg.marquee = v == "1" || v == "true",
                     "lyric_font" => cfg.lyric_font = v.parse().unwrap_or(cfg.lyric_font),
                     "spectrum" => cfg.spectrum = v == "1" || v == "true",
+                    "upd_seen_rail" => cfg.upd_seen_rail = v.to_string(),
+                    "upd_seen_row" => cfg.upd_seen_row = v.to_string(),
                     _ => {}
                 }
             }
@@ -384,7 +392,7 @@ impl Config {
 
     fn save(&self) {
         let text = format!(
-            "# MyIsle 配置\nposition={}\nx_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\n",
+            "# MyIsle 配置\nposition={}\nx_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\nupd_seen_rail={}\nupd_seen_row={}\n",
             self.position.as_str(),
             self.x_frac,
             self.font,
@@ -405,6 +413,8 @@ impl Config {
             self.marquee as u8,
             self.lyric_font,
             self.spectrum as u8,
+            self.upd_seen_rail,
+            self.upd_seen_row,
         );
         let _ = std::fs::write(config_path(), text);
     }
@@ -1027,7 +1037,7 @@ impl IslandApp {
     /// 收起态宽度：有音乐时加宽到 W_COLLAPSED_MUSIC（放歌词/歌名），否则窄胶囊。
     /// 收起态前面可动态插入的额外元素总宽度（目前是「升级」胶囊，以后可继续加）。
     fn collapsed_extra_w(&self) -> f32 {
-        if self.upd_ver.is_some() {
+        if self.show_time_update() {
             UPD_BADGE_W + 10.0
         } else {
             0.0
@@ -1085,6 +1095,48 @@ impl IslandApp {
     fn app_is_soda(&self) -> bool {
         let a = self.music.app_id.to_ascii_lowercase();
         a.contains("汽水") || a.contains("soda") || a.contains("qishui")
+    }
+
+    fn upd_version(&self) -> Option<String> {
+        self.upd_ver.as_ref().map(|m| m.version.clone())
+    }
+
+    /// 收起态时间旁的升级胶囊：设置菜单点过一次后就不再出现（按版本记录）。
+    fn show_time_update(&self) -> bool {
+        match self.upd_version() {
+            Some(v) => v != self.cfg.upd_seen_rail,
+            None => false,
+        }
+    }
+
+    fn show_rail_update(&self) -> bool {
+        self.show_time_update()
+    }
+
+    /// 设置页“软件更新”行角标：只有用户真的点过这一行才消失（按版本记录）。
+    fn show_row_update(&self) -> bool {
+        match self.upd_version() {
+            Some(v) => v != self.cfg.upd_seen_row,
+            None => false,
+        }
+    }
+
+    fn mark_upd_seen_rail(&mut self) {
+        if let Some(v) = self.upd_version() {
+            if self.cfg.upd_seen_rail != v {
+                self.cfg.upd_seen_rail = v;
+                self.cfg.save();
+            }
+        }
+    }
+
+    fn mark_upd_seen_row(&mut self) {
+        if let Some(v) = self.upd_version() {
+            if self.cfg.upd_seen_row != v {
+                self.cfg.upd_seen_row = v;
+                self.cfg.save();
+            }
+        }
     }
 
     fn duration_est(&self) -> f64 {
@@ -1504,7 +1556,7 @@ impl IslandApp {
                     .size()
                     .x;
                 let time_left = pill.right() - 13.0 - time_w;
-                let badge_left = if self.upd_ver.is_some() {
+                let badge_left = if self.show_time_update() {
                     time_left - UPD_BADGE_GAP - UPD_BADGE_W
                 } else {
                     time_left
@@ -1604,7 +1656,7 @@ impl IslandApp {
                     time_font,
                     fg,
                 ));
-                if self.upd_ver.is_some() {
+                if self.show_time_update() {
                     let br = egui::Rect::from_min_size(
                         egui::pos2(badge_left, cy - UPD_BADGE_H * 0.5),
                         egui::vec2(UPD_BADGE_W, UPD_BADGE_H),
@@ -1619,7 +1671,7 @@ impl IslandApp {
                 let centered_a = (a as f32 * (1.0 - amt)) as u8; // 无音乐时居中时间，随音乐淡入而淡出
                 let col = egui::Color32::from_rgba_unmultiplied(238, 240, 246, centered_a);
                 let font = bold_font(self.cfg.font);
-                if self.upd_ver.is_some() {
+                if self.show_time_update() {
                     // 「↑ 升级」+ 时间整体居中
                     let time_w = painter
                         .layout_no_wrap(s.clone(), font.clone(), col)
@@ -2354,14 +2406,16 @@ impl IslandApp {
             if resp.clicked() && !self.show_settings {
                 self.settings_scroll = 0.0;
                 self.show_settings = true;
+                self.mark_upd_seen_rail();
                 if self.upd_ver.is_none() && !self.upd_checking {
                     self.start_update_check();
                 }
             }
-            // 有新版本：设置菜单右上角一个小绿点，提示里面有更新
-            if self.upd_ver.is_some() {
-                let bc = egui::pos2(item.right() - 9.0, item.top() + 9.0);
-                self.paint_update_mark(&painter, bc, 11.5, false);
+            // 有新版本：设置菜单右上角一个圆点角标，提示里面有更新（看过一次后不再出现）
+            if self.show_rail_update() {
+                let bc = egui::pos2(item.right() - 8.0, item.top() + 8.0);
+                painter.circle_filled(bc, 4.8, egui::Color32::from_rgba_unmultiplied(18, 20, 25, a));
+                painter.circle_filled(bc, 3.0, accent);
             }
         }
 
@@ -2439,7 +2493,7 @@ impl IslandApp {
         // 与返回按钮一致：无底色、无描边，只留齿轮图标，悬停不高亮
         let col = egui::Color32::from_rgba_unmultiplied(170, 178, 195, a);
         painter.text(c, egui::Align2::CENTER_CENTER, "\u{E713}", icon_font(15.0), col); // Settings 齿轮
-        if vis > 0.5 && resp.clicked() { self.settings_scroll = 0.0; self.show_settings = true; }
+        if vis > 0.5 && resp.clicked() { self.settings_scroll = 0.0; self.show_settings = true; self.mark_upd_seen_rail(); }
     }
 
     /// 后台检查更新（不阻塞 UI）。
@@ -2619,7 +2673,15 @@ impl IslandApp {
                 (format!("v{} · 检查更新", update::VERSION), muted2)
             };
             painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, egui::FontId::proportional(11.5), col);
+            if self.show_row_update() {
+                painter.circle_filled(
+                    egui::pos2(up_row.left() + 4.0, y + row_h * 0.5),
+                    3.0,
+                    accent,
+                );
+            }
             if resp.clicked() {
+                self.mark_upd_seen_row();
                 if self.upd_ver.is_some() {
                     self.start_update_install();
                 } else {
