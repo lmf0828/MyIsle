@@ -2544,6 +2544,10 @@ impl IslandApp {
                 Ok(Some(m)) => {
                     self.upd_msg = format!("发现新版本 v{}", m.version);
                     self.upd_ver = Some(m);
+                    // 如果此刻已经在设置页里，视为“设置已看过”，收起态/设置角标不再出现
+                    if self.show_settings {
+                        self.mark_upd_seen_rail();
+                    }
                 }
                 Ok(None) => {
                     self.upd_ver = None;
