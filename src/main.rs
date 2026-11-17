@@ -24,6 +24,9 @@ use tray::{Tray, TrayAction};
 // 收起?/ 展开态的窗口尺寸（逻辑点）
 const W_COLLAPSED: f32 = 150.0;
 const W_COLLAPSED_MUSIC: f32 = 356.0;
+const UPD_BADGE_W: f32 = 26.0;
+const UPD_BADGE_H: f32 = 10.0;
+const UPD_BADGE_GAP: f32 = 8.0;
 const H_COLLAPSED: f32 = 30.0;
 const W_EXPANDED: f32 = 520.0;
 const H_EXPANDED: f32 = 300.0;
@@ -734,6 +737,7 @@ struct IslandApp {
     tt_base: Option<egui::TextureHandle>,
     tt_arm0: Option<egui::TextureHandle>,
     cover_tex: Option<egui::TextureHandle>,
+    upd_badge_tex: Option<egui::TextureHandle>,
     /// 兜底：SMTC 不可用时，从播放器窗口标题抓 “歌名 - 歌手”
     media_title_at: Instant,
     media_title_cache: Option<(String, String, String)>,
@@ -892,6 +896,7 @@ impl IslandApp {
             tt_base: None,
             tt_arm0: None,
             cover_tex: None,
+        upd_badge_tex: None,
             media_title_at: Instant::now() - Duration::from_secs(10),
             media_title_cache: None,
             player_running_cached: false,
@@ -1020,8 +1025,19 @@ impl IslandApp {
     }
 
     /// 收起态宽度：有音乐时加宽到 W_COLLAPSED_MUSIC（放歌词/歌名），否则窄胶囊。
+    /// 收起态前面可动态插入的额外元素总宽度（目前是「升级」胶囊，以后可继续加）。
+    fn collapsed_extra_w(&self) -> f32 {
+        if self.upd_ver.is_some() {
+            UPD_BADGE_W + 10.0
+        } else {
+            0.0
+        }
+    }
+
     fn collapsed_w(&self) -> f32 {
-        W_COLLAPSED + (W_COLLAPSED_MUSIC - W_COLLAPSED) * self.music_amt.clamp(0.0, 1.0)
+        W_COLLAPSED
+            + (W_COLLAPSED_MUSIC - W_COLLAPSED) * self.music_amt.clamp(0.0, 1.0)
+            + self.collapsed_extra_w()
     }
 
     /// 有效播放状态：SMTC 可用时以真实状态为准；否则用本地乐观状态（媒体键控制无法回读）。
@@ -1482,6 +1498,17 @@ impl IslandApp {
                     time_s = format!("{}:{:02}", time_s, st.wSecond);
                 }
                 let time_font = bold_font(14.0);
+                // 右侧内容宽度按「升级胶囊 + 时间」动态计算，岛体宽度也同步变化
+                let time_w = painter
+                    .layout_no_wrap(time_s.clone(), time_font.clone(), fg)
+                    .size()
+                    .x;
+                let time_left = pill.right() - 13.0 - time_w;
+                let badge_left = if self.upd_ver.is_some() {
+                    time_left - UPD_BADGE_GAP - UPD_BADGE_W
+                } else {
+                    time_left
+                };
                 // 左侧跳动频谱：底部与歌词文字底部对齐，只有上半部分随动画长高/回落
                 let lyric_font = egui::FontId::proportional(14.0);
                 // 行框底部会低于汉字实际墨迹底部约 3pt，这里减掉，使频谱底边与歌词/时间文字底边齐平
@@ -1510,7 +1537,7 @@ impl IslandApp {
                 let fill_green = if self.cfg.char_green { green } else { base };
                 let text_rect = egui::Rect::from_min_size(
                     egui::pos2(sx + 22.0, pill.top()),
-                    egui::vec2((pill.right() - 52.0) - (sx + 22.0), pill.height()),
+                    egui::vec2((badge_left - 10.0) - (sx + 22.0), pill.height()),
                 );
                 let cur = self.cur_lyric_idx();
                 if let Some(i) = cur {
@@ -1569,15 +1596,21 @@ impl IslandApp {
                     };
                     self.draw_marquee(&painter, text_rect, &text, egui::FontId::proportional(14.0), fg, t);
                 }
-                // 右侧时间
-                let upd_pad = if self.upd_ver.is_some() { 16.0 } else { 0.0 };
+                // 右侧时间（升级胶囊在它左边）
                 time_rect = Some(painter.text(
-                    egui::pos2(pill.right() - 13.0 - upd_pad, cy),
+                    egui::pos2(pill.right() - 13.0, cy),
                     egui::Align2::RIGHT_CENTER,
                     &time_s,
                     time_font,
                     fg,
                 ));
+                if self.upd_ver.is_some() {
+                    let br = egui::Rect::from_min_size(
+                        egui::pos2(badge_left, cy - UPD_BADGE_H * 0.5),
+                        egui::vec2(UPD_BADGE_W, UPD_BADGE_H),
+                    );
+                    self.paint_update_pill(&painter, br, am);
+                }
             } else {
                 let mut s = format!("{:02}:{:02}", st.wHour, st.wMinute);
                 if self.cfg.show_seconds {
@@ -1586,21 +1619,36 @@ impl IslandApp {
                 let centered_a = (a as f32 * (1.0 - amt)) as u8; // 无音乐时居中时间，随音乐淡入而淡出
                 let col = egui::Color32::from_rgba_unmultiplied(238, 240, 246, centered_a);
                 let font = bold_font(self.cfg.font);
-                // 无音乐时只居中显示时间
-                time_rect = Some(painter.text(
-                    egui::pos2(pill.center().x, pill.center().y - self.cfg.font * 0.06),
-                    egui::Align2::CENTER_CENTER,
-                    &s,
-                    font,
-                    col,
-                ));
-            }
-            // 有新版本时，紧跟时间右侧显示一个小绿点（不打扰，但一眼能看到）
-            if self.upd_ver.is_some() {
-                let bp = time_rect
-                    .map(|r| egui::pos2(r.right() + 12.0, r.center().y))
-                    .unwrap_or_else(|| egui::pos2(pill.center().x + 52.0, pill.center().y));
-                self.paint_update_mark(&painter, bp, 14.0, true);
+                if self.upd_ver.is_some() {
+                    // 「↑ 升级」+ 时间整体居中
+                    let time_w = painter
+                        .layout_no_wrap(s.clone(), font.clone(), col)
+                        .size()
+                        .x;
+                    let group_w = UPD_BADGE_W + UPD_BADGE_GAP + time_w;
+                    let start = pill.center().x - group_w * 0.5;
+                    let br = egui::Rect::from_min_size(
+                        egui::pos2(start, pill.center().y - UPD_BADGE_H * 0.5),
+                        egui::vec2(UPD_BADGE_W, UPD_BADGE_H),
+                    );
+                    self.paint_update_pill(&painter, br, centered_a);
+                    time_rect = Some(painter.text(
+                        egui::pos2(start + UPD_BADGE_W + UPD_BADGE_GAP, pill.center().y - self.cfg.font * 0.06),
+                        egui::Align2::LEFT_CENTER,
+                        &s,
+                        font,
+                        col,
+                    ));
+                } else {
+                    // 无音乐时只居中显示时间
+                    time_rect = Some(painter.text(
+                        egui::pos2(pill.center().x, pill.center().y - self.cfg.font * 0.06),
+                        egui::Align2::CENTER_CENTER,
+                        &s,
+                        font,
+                        col,
+                    ));
+                }
             }
         } else {
             self.draw_expanded_panel(ui, &painter, pill, e, t);
@@ -1681,6 +1729,31 @@ impl IslandApp {
     }
 
     /// 有新版本时的小徽标：薄荷绿描边圆角小方块 + 向上箭头（不要文字，避免像状态灯）。
+    /// 收起态「↑ 升级」胶囊：按设计稿 1:1 还原（深绿底、薄荷描边、实心箭头 + 升级）。
+    fn paint_update_pill(&mut self, painter: &egui::Painter, rect: egui::Rect, alpha: u8) {
+        if self.upd_badge_tex.is_none() {
+            let bytes: &[u8] = include_bytes!("../assets/update_badge.png");
+            if let Ok(img) = image::load_from_memory(bytes) {
+                let img = img.to_rgba8();
+                let size = [img.width() as usize, img.height() as usize];
+                let ci = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+                self.upd_badge_tex = Some(painter.ctx().load_texture(
+                    "update_badge",
+                    ci,
+                    egui::TextureOptions::NEAREST,
+                ));
+            }
+        }
+        if let Some(tex) = self.upd_badge_tex.as_ref() {
+            painter.image(
+                tex.id(),
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::from_white_alpha(alpha),
+            );
+        }
+    }
+
     fn paint_update_mark(
         &self,
         painter: &egui::Painter,
