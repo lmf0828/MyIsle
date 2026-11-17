@@ -1570,8 +1570,9 @@ impl IslandApp {
                     self.draw_marquee(&painter, text_rect, &text, egui::FontId::proportional(14.0), fg, t);
                 }
                 // 右侧时间
+                let upd_pad = if self.upd_ver.is_some() { 22.0 } else { 0.0 };
                 time_rect = Some(painter.text(
-                    egui::pos2(pill.right() - 13.0, cy),
+                    egui::pos2(pill.right() - 13.0 - upd_pad, cy),
                     egui::Align2::RIGHT_CENTER,
                     &time_s,
                     time_font,
@@ -1597,10 +1598,9 @@ impl IslandApp {
             // 有新版本时，紧跟时间右侧显示一个小绿点（不打扰，但一眼能看到）
             if self.upd_ver.is_some() {
                 let bp = time_rect
-                    .map(|r| egui::pos2(r.right() + 7.0, r.center().y))
-                    .unwrap_or_else(|| egui::pos2(pill.center().x + 46.0, pill.center().y));
-                painter.circle_filled(bp, 3.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 230));
-                painter.circle_stroke(bp, 3.6, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 60)));
+                    .map(|r| egui::pos2(r.right() + 16.0, r.center().y))
+                    .unwrap_or_else(|| egui::pos2(pill.center().x + 52.0, pill.center().y));
+                self.paint_update_mark(&painter, bp, 18.0);
             }
         } else {
             self.draw_expanded_panel(ui, &painter, pill, e, t);
@@ -1678,6 +1678,41 @@ impl IslandApp {
             n += 1;
         }
         galley.size().x
+    }
+
+    /// 有新版本时的小徽标：薄荷绿描边圆角小方块 + 向上箭头（不要文字，避免像状态灯）。
+    fn paint_update_mark(&self, painter: &egui::Painter, center: egui::Pos2, h: f32) {
+        let rect = egui::Rect::from_center_size(center, egui::vec2(h, h));
+        let cr = egui::CornerRadius::same((h * 0.5) as u8);
+        painter.rect_filled(
+            rect,
+            cr,
+            egui::Color32::from_rgba_unmultiplied(52, 211, 153, 34),
+        );
+        painter.rect_stroke(
+            rect,
+            cr,
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 120)),
+            egui::StrokeKind::Inside,
+        );
+        let col = egui::Color32::from_rgb(125, 240, 187);
+        let s = h * 0.24;
+        let (cx, cy) = (center.x, center.y);
+        painter.add(egui::Shape::line(
+            vec![
+                egui::pos2(cx - s, cy + s * 0.25),
+                egui::pos2(cx, cy - s * 0.85),
+                egui::pos2(cx + s, cy + s * 0.25),
+            ],
+            egui::Stroke::new((h * 0.09).max(1.2), col),
+        ));
+        painter.line_segment(
+            [
+                egui::pos2(cx, cy - s * 0.35),
+                egui::pos2(cx, cy + s * 0.95),
+            ],
+            egui::Stroke::new((h * 0.09).max(1.2), col),
+        );
     }
 
     /// 歌词上下边缘柔和淡出：按“整行盒子”到上下边界的距离衰减。
@@ -2256,13 +2291,8 @@ impl IslandApp {
             }
             // 有新版本：设置菜单右上角一个小绿点，提示里面有更新
             if self.upd_ver.is_some() {
-                let bc = egui::pos2(item.right() - 3.0, item.top() + 5.0);
-                painter.circle_filled(
-                    bc,
-                    5.0,
-                    egui::Color32::from_rgba_unmultiplied(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2], 235),
-                );
-                painter.circle_filled(bc, 3.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 240));
+                let bc = egui::pos2(item.right() - 9.0, item.top() + 9.0);
+                self.paint_update_mark(&painter, bc, 14.0);
             }
         }
 

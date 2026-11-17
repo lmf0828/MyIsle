@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>MyIsle · 升级标志 原型 v3</title>
+<style>
+  :root{--bg:#0b0c10;--text:#eef1f6;--muted:#9aa1ad;--muted2:#6c737f;--mint:#34d399;--mint2:#4ade80;}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 520px at 50% -10%,#1a2030 0%,transparent 60%),var(--bg);
+    color:var(--text);font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 30px 70px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:28px}
+  .sub b{color:var(--mint2)}
+  .grid{display:flex;flex-wrap:wrap;gap:26px}
+  .art{width:460px}
+  .cap{font-size:12px;color:var(--muted);margin-bottom:10px}
+  .cap b{color:var(--text)}
+  .pill{height:62px;border-radius:18px;background:linear-gradient(180deg,#1d1f26,#16181d);
+    border:1px solid rgba(255,255,255,.07);box-shadow:0 20px 50px rgba(0,0,0,.5);display:flex;align-items:center;padding:0 18px;gap:14px}
+  .spec{display:flex;align-items:flex-end;gap:3px;height:18px;flex:none}
+  .spec i{width:3px;border-radius:2px;background:linear-gradient(180deg,#6ee7b7,#34d399)}
+  .spec i:nth-child(1){height:9px}.spec i:nth-child(2){height:15px}.spec i:nth-child(3){height:11px}
+  .txt{flex:1;font-size:14px;color:#e8ebf1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .txt small{color:#9aa1ad;font-size:12px}
+  .tw{display:flex;align-items:center;gap:8px;flex:none}
+  .time{font-size:14px;font-weight:700;letter-spacing:.5px}
+  /* A 圆形箭头徽标 */
+  .iconbadge{width:17px;height:17px;border-radius:50%;background:linear-gradient(180deg,#5ee6ae,#22b982);
+    display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 3px rgba(52,211,153,.12)}
+  .iconbadge svg{width:11px;height:11px;display:block}
+  /* B 胶囊 */
+  .upchip{height:18px;padding:0 7px;border-radius:99px;background:rgba(52,211,153,.14);
+    border:1px solid rgba(52,211,153,.35);color:#7df0bb;font-size:10.5px;font-weight:700;display:flex;align-items:center;gap:3px;letter-spacing:.3px}
+  .upchip svg{width:9px;height:9px}
+  /* C NEW 标签 */
+  .newtag{height:17px;padding:0 6px;border-radius:6px;background:var(--mint2);color:#06251b;font-size:9px;font-weight:800;
+    display:flex;align-items:center;gap:3px;letter-spacing:.4px}
+  .newtag svg{width:8px;height:8px}
+  .note{font-size:12px;color:var(--muted2);margin-top:10px;line-height:1.7;max-width:460px}
+  .note b{color:var(--muted)}
+  .panel{width:760px;height:400px;border-radius:26px;background:linear-gradient(180deg,#191b21,#141519);
+    border:1px solid rgba(255,255,255,.06);display:flex;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.5)}
+  .rail{width:92px;background:rgba(10,11,14,.55);padding:14px 10px;display:flex;flex-direction:column;gap:6px;border-right:1px solid rgba(255,255,255,.04)}
+  .ri{border-radius:14px;padding:10px 6px;display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;color:#aeb4bf;position:relative}
+  .ri .g{font-size:18px}
+  .ri.active{background:rgba(52,211,153,.16);color:var(--mint2)}
+  .ri.set{margin-top:auto}
+  .ri .badge{position:absolute;right:3px;top:5px;width:14px;height:14px;border-radius:50%;
+    background:linear-gradient(180deg,#5ee6ae,#22b982);display:flex;align-items:center;justify-content:center;
+    box-shadow:0 0 0 2px #16171c}
+  .ri .badge svg{width:9px;height:9px}
+  .content{flex:1;padding:18px 20px}
+  .crumb{font-size:12px;color:#6c737f}.crumb b{color:#eef1f6}
+</style>
+</head>
+<body>
+  <h1>MyIsle · 时间旁的「升级标志」原型 v3</h1>
+  <div class="sub">把原来的小圆点换成更有语义的<b>向上箭头</b>：一眼就知道是“有新版本”，不会误认成状态灯。下面三种是同一位置的三种样式，你选一个。</div>
+
+  <div class="grid">
+    <!-- A -->
+    <div class="art">
+      <div class="cap"><b>A（推荐）</b> · 时间右侧「↑」圆形徽标 · 17px</div>
+      <div class="pill">
+        <div class="spec"><i></i><i></i><i></i></div>
+        <div class="txt">慢倍速(氛围版) <small>· 陆知远</small></div>
+        <div class="tw"><span class="time">17:02</span>
+          <span class="iconbadge"><svg viewBox="0 0 12 12"><path d="M6 9.6V3.2M6 3.2 3.1 6.1M6 3.2l2.9 2.9" fill="none" stroke="#083326" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+      </div>
+      <div class="note">最紧凑，像一个「更新徽标」；颜色和岛的薄荷绿一致。无更新时整个不出现。</div>
+    </div>
+
+    <!-- B -->
+    <div class="art">
+      <div class="cap"><b>B</b> · 「↑ 升级」小胶囊 · 更明确</div>
+      <div class="pill">
+        <div class="spec"><i></i><i></i><i></i></div>
+        <div class="txt">慢倍速(氛围版) <small>· 陆知远</small></div>
+        <div class="tw"><span class="time">17:02</span>
+          <span class="upchip"><svg viewBox="0 0 12 12"><path d="M6 9.6V3.2M6 3.2 3.1 6.1M6 3.2l2.9 2.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>升级</span>
+        </div>
+      </div>
+      <div class="note">最不容易误解，但会多占约 30px 宽度；歌名很长时右边空间更紧。</div>
+    </div>
+
+    <!-- C -->
+    <div class="art">
+      <div class="cap"><b>C</b> · 「NEW ↑」小标签 · 最醒目</div>
+      <div class="pill">
+        <div class="spec"><i></i><i></i><i></i></div>
+        <div class="txt">慢倍速(氛围版) <small>· 陆知远</small></div>
+        <div class="tw"><span class="time">17:02</span>
+          <span class="newtag"><svg viewBox="0 0 12 12"><path d="M6 9.6V3.2M6 3.2 3.1 6.1M6 3.2l2.9 2.9" fill="none" stroke="#06251b" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>NEW</span>
+        </div>
+      </div>
+      <div class="note">绿色实心标签，提示最强；但比 A/B 都更“抢眼”，可能有点吵。</div>
+    </div>
+  </div>
+
+  <div style="height:18px"></div>
+
+  <div class="cap"><b>展开态</b> · 左侧「设置」右上角用同款「↑」徽标（和收起态一致）</div>
+  <div class="panel">
+    <div class="rail">
+      <div class="ri active"><span class="g">♫</span>音乐</div>
+      <div class="ri"><span class="g">☁</span>天气</div>
+      <div class="ri set"><span class="g">⚙</span>设置
+        <span class="badge"><svg viewBox="0 0 12 12"><path d="M6 9.6V3.2M6 3.2 3.1 6.1M6 3.2l2.9 2.9" fill="none" stroke="#083326" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      </div>
+    </div>
+    <div class="content">
+      <div class="crumb">音乐 / <b>正在播放</b></div>
+      <div style="font-size:26px;font-weight:800;margin-top:8px">慢倍速(氛围版)</div>
+      <div style="color:#9aa1ad;font-size:12px;margin-top:4px">陆知远 · 汽水音乐</div>
+      <div style="height:6px;border-radius:4px;background:#2a2d35;margin-top:22px;position:relative">
+        <div style="height:100%;width:58%;border-radius:4px;background:linear-gradient(90deg,#22c58b,#4ade80)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10.5px;color:#6c737f;margin-top:6px"><span>2:10</span><span>3:43</span></div>
+    </div>
+  </div>
+</body>
+</html>
