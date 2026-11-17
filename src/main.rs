@@ -2381,7 +2381,7 @@ impl IslandApp {
         let list_top = content.top() + header_h;
         let list_bottom = content.bottom() - CONTENT_PAD_B;
         let view_h = (list_bottom - list_top).max(1.0);
-        let total_h = label_h * 2.0 + row_h * 5.0;
+        let total_h = label_h * 2.0 + row_h * 6.0;
         let max_scroll = (total_h - view_h).max(0.0);
         if let Some(ph) = ui.ctx().pointer_hover_pos() {
             if full.contains(ph) && max_scroll > 0.0 {
@@ -2464,6 +2464,22 @@ impl IslandApp {
                 ("运行中 · 歌词未连接".to_string(), egui::Color32::from_rgba_unmultiplied(224, 178, 92, a))
             } else {
                 ("未运行（会自动拉起）".to_string(), muted2)
+            };
+            painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, egui::FontId::proportional(10.5), col);
+        }
+        y += row_h;
+
+        // 网易云连接状态（只展示）
+        row_label(painter, y, "网易云连接", ink);
+        {
+            let running = crate::platform::process_running("cloudmusic.exe");
+            let live = crate::platform::netease_posdur_cached().is_some();
+            let (txt, col) = if running && live {
+                ("运行中 · 歌词/进度已连接".to_string(), accent)
+            } else if running {
+                ("运行中 · 等待播放".to_string(), egui::Color32::from_rgba_unmultiplied(224, 178, 92, a))
+            } else {
+                ("未运行".to_string(), muted2)
             };
             painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, egui::FontId::proportional(10.5), col);
         }

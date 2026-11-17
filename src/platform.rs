@@ -850,6 +850,11 @@ fn read_f64(h: isize, addr: usize) -> Option<f64> {
     let ok = unsafe { ReadProcessMemory(h, addr, b.as_mut_ptr(), 8, &mut got) };
     (ok != 0 && got == 8).then(|| f64::from_le_bytes(b))
 }
+/// 指定进程名是否在运行（供设置页展示连接状态）。
+pub fn process_running(name: &str) -> bool {
+    !pids_named(name).is_empty()
+}
+
 fn pids_named(name: &str) -> Vec<u32> {    let mut out = Vec::new();
     unsafe {
         let snap = CreateToolhelp32Snapshot(0x00000002, 0);
