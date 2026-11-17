@@ -964,6 +964,18 @@ impl IslandApp {
             return;
         }
         let now = Instant::now();
+        if std::env::var_os("MYISLE_FORCE_EXPAND").is_some() {
+            // 仅调试：无鼠标环境下强制展开（用于截图/自动化）
+            self.target = 1.0;
+            self.collapse_at = None;
+            let dt = ctx.input(|i| i.stable_dt).min(0.05);
+            let k = 1.0 - (-15.0 * dt).exp();
+            self.expanded += (1.0 - self.expanded) * k;
+            if (1.0 - self.expanded).abs() > 0.002 {
+                ctx.request_repaint();
+            }
+            return;
+        }
         if self.dragging || self.settle.is_some() {
             self.target = 0.0;
             self.collapse_at = None;
@@ -1800,8 +1812,13 @@ impl IslandApp {
         // 唱片区 150x150 的方框里有透明留白（外环半径 < 半个方框）。要让「看得见的圆盘边缘」
         // 与内容区左/上边距完全相等，就把方框整体向 左/上 挪掉这圈留白。
         let disc_pad = tt_size * 0.5 - outer_r;
+        // 视觉圆盘略往下放，别顶着面板上沿
+        let disc_top_nudge = 10.0f32;
         let tt_rect = egui::Rect::from_min_size(
-            egui::pos2(cx0 - disc_pad, rect.top() + CONTENT_PAD_T - disc_pad),
+            egui::pos2(
+                cx0 - disc_pad,
+                rect.top() + CONTENT_PAD_T - disc_pad + disc_top_nudge,
+            ),
             egui::vec2(tt_size, tt_size),
         );
         let dc = tt_rect.center();
