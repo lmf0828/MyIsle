@@ -49,41 +49,8 @@ impl Tray {
     }
 }
 
-/// 运行时生成托盘图标：深色圆角方块 + 居中青绿圆点（与灵动岛品牌一致）。
-fn make_icon_rgba(w: u32, h: u32) -> (Vec<u8>, u32, u32) {
-    let mut buf = vec![0u8; (w * h * 4) as usize];
-    let fw = w as f32;
-    let fh = h as f32;
-    let cx = fw / 2.0;
-    let cy = fh / 2.0;
-    let rad = 7.0f32; // 圆角
-    for y in 0..h {
-        for x in 0..w {
-            let fx = x as f32 + 0.5;
-            let fy = y as f32 + 0.5;
-            let dx = (fx - fw / 2.0).abs() - (fw / 2.0 - rad);
-            let dy = (fy - fh / 2.0).abs() - (fh / 2.0 - rad);
-            let ox = dx.max(0.0);
-            let oy = dy.max(0.0);
-            let outside = (ox * ox + oy * oy).sqrt() - rad;
-            let idx = ((y * w + x) * 4) as usize;
-            if outside <= 0.0 {
-                let mut c = [30.0f32, 32.0, 38.0];
-                let d = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
-                if d < 6.4 {
-                    let t = (d / 6.4).clamp(0.0, 1.0);
-                    c = [
-                        94.0 * (1.0 - t) + 16.0 * t,
-                        240.0 * (1.0 - t) + 185.0 * t,
-                        182.0 * (1.0 - t) + 129.0 * t,
-                    ];
-                }
-                buf[idx] = c[0] as u8;
-                buf[idx + 1] = c[1] as u8;
-                buf[idx + 2] = c[2] as u8;
-                buf[idx + 3] = 255;
-            }
-        }
-    }
-    (buf, w, h)
+/// 托盘图标：与 exe 图标同一套「MyIsle」品牌（深色圆角方块 + M 立于青绿孤岛）。
+/// 32×32 RGBA 由 assets/myisle_32.rgba 在构建期嵌入，避免运行时绘制差异。
+fn make_icon_rgba(_w: u32, _h: u32) -> (Vec<u8>, u32, u32) {
+    (include_bytes!("../assets/myisle_32.rgba").to_vec(), 32, 32)
 }
