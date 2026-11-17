@@ -380,6 +380,37 @@ pub fn restart_soda() -> Result<(), String> {
     launch_soda()
 }
 
+/// 设置页「汽水连接」行的「一键修复」：后台线程里 关闭汽水 → 重打补丁 → 重新拉起。
+/// 不阻塞 UI；状态缓存 3 秒后会自然刷新。
+pub fn spawn_repair() -> Result<(), String> {
+    std::thread::spawn(|| {
+        dlog("manual repair: start");
+        if soda_running() {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/IM", "SodaMusic.exe", "/F"])
+                .status();
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        match ensure_patched() {
+            Ok(true) => dlog("manual repair: patch applied"),
+            Ok(false) => dlog("manual repair: already patched"),
+            Err(e) => dlog(&format!("manual repair: patch failed: {e}")),
+        }
+        if !soda_running() {
+            if let Err(e) = launch_soda() {
+                dlog(&format!("manual repair: launch failed: {e}"));
+            }
+        }
+        std::thread::sleep(Duration::from_secs(4));
+        dlog(&format!(
+            "manual repair: done running={} cdp={}",
+            soda_running(),
+            cdp_up()
+        ));
+    });
+    Ok(())
+}
+
 /// 启动时调用一次：确保补丁可用。汽水在运行但补丁缺失时，自动重启一次把它补好；
 /// 若补丁已在、只是 CDP 还没热起来，则不动它（留给 tick 处理）。
 pub fn boot_check() {

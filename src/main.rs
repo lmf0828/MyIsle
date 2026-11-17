@@ -784,6 +784,8 @@ struct IslandApp {
     upd_last_check: Instant,
     upd_rx: Option<std::sync::mpsc::Receiver<Result<Option<update::Manifest>, String>>>,
     upd_inst_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    /// 用户点「一键修复」后用于显示「正在修复…」的时间戳。
+    soda_repair_at: Instant,
 }
 
 impl IslandApp {
@@ -915,6 +917,7 @@ impl IslandApp {
             upd_last_check: Instant::now() - Duration::from_secs(5 * 3600),
             upd_rx: None,
             upd_inst_rx: None,
+            soda_repair_at: Instant::now() - Duration::from_secs(3600),
         }
     }
 
@@ -2454,18 +2457,31 @@ impl IslandApp {
         }
         y += row_h;
 
-        // 汽水连接状态（只展示，不需要用户设置）
+        // 汽水连接状态（未连接时可点「一键修复」：自动关闭汽水→重打补丁→重新拉起）
         row_label(painter, y, "汽水连接", ink);
         {
+            let repairing = self.soda_repair_at.elapsed() < Duration::from_secs(20);
             let (running, cdp) = crate::soda_patch::status_cached();
-            let (txt, col) = if running && cdp {
-                ("运行中 · 歌词已连接".to_string(), accent)
+            let (txt, col, clickable) = if repairing {
+                ("正在修复…".to_string(), accent, false)
+            } else if running && cdp {
+                ("运行中 · 歌词已连接".to_string(), accent, false)
             } else if running {
-                ("运行中 · 歌词未连接".to_string(), egui::Color32::from_rgba_unmultiplied(224, 178, 92, a))
+                ("未连接 · 点击修复 ›".to_string(), egui::Color32::from_rgba_unmultiplied(224, 178, 92, a), true)
             } else {
-                ("未运行（会自动拉起）".to_string(), muted2)
+                ("未运行 · 点击启动修复 ›".to_string(), muted2, true)
             };
+            let hit = egui::Rect::from_min_max(
+                egui::pos2(right - 200.0, y + 2.0),
+                egui::pos2(right, y + row_h - 2.0),
+            );
+            let resp = ui.interact(hit, ui.id().with("soda_repair_row"), egui::Sense::click());
+            let resp = if clickable { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
             painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, egui::FontId::proportional(10.5), col);
+            if clickable && resp.clicked() {
+                self.soda_repair_at = Instant::now();
+                let _ = crate::soda_patch::spawn_repair();
+            }
         }
         y += row_h;
 
