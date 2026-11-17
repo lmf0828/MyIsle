@@ -24,8 +24,8 @@ use tray::{Tray, TrayAction};
 // 收起?/ 展开态的窗口尺寸（逻辑点）
 const W_COLLAPSED: f32 = 150.0;
 const W_COLLAPSED_MUSIC: f32 = 356.0;
-const UPD_BADGE_W: f32 = 26.0;
-const UPD_BADGE_H: f32 = 10.0;
+const UPD_BADGE_W: f32 = 36.0;
+const UPD_BADGE_H: f32 = 13.8;
 const UPD_BADGE_GAP: f32 = 8.0;
 const H_COLLAPSED: f32 = 30.0;
 const W_EXPANDED: f32 = 520.0;
