@@ -1600,7 +1600,7 @@ impl IslandApp {
                 let bp = time_rect
                     .map(|r| egui::pos2(r.right() + 12.0, r.center().y))
                     .unwrap_or_else(|| egui::pos2(pill.center().x + 52.0, pill.center().y));
-                self.paint_update_mark(&painter, bp, 13.0, true);
+                self.paint_update_mark(&painter, bp, 14.0, true);
             }
         } else {
             self.draw_expanded_panel(ui, &painter, pill, e, t);
@@ -1688,21 +1688,26 @@ impl IslandApp {
         size: f32,
         animate: bool,
     ) {
-        /// 使用系统图标组件库（Segoe MDL2 Assets）的「↑」字形，不手绘图标。
+        // 图标字形来自系统图标组件库（Segoe MDL2 Assets，E74A = Up），这里只提供圆形徽标底座。
         let t = painter.ctx().input(|i| i.time) as f32;
         let wave = 0.5 + 0.5 * (t * 2.6).sin();
-        let (alpha, bob) = if animate {
-            ((150.0 + 105.0 * wave) as u8, -1.6 * wave)
+        let (bg_a, bob) = if animate {
+            ((205.0 + 50.0 * wave) as u8, -1.2 * wave)
         } else {
-            (235, 0.0)
+            (245, 0.0)
         };
-        let col = egui::Color32::from_rgba_unmultiplied(125, 240, 187, alpha);
+        let c = egui::pos2(center.x, center.y + bob);
+        painter.circle_filled(
+            c,
+            size * 0.5,
+            egui::Color32::from_rgba_unmultiplied(74, 222, 128, bg_a),
+        );
         painter.text(
-            egui::pos2(center.x, center.y + bob),
+            c,
             egui::Align2::CENTER_CENTER,
-            "\u{E74A}", // Segoe MDL2 Assets: Up
-            icon_font(size),
-            col,
+            "\u{E74A}",
+            icon_font(size * 0.56),
+            egui::Color32::from_rgba_unmultiplied(6, 46, 35, 255),
         );
     }
 
@@ -2283,7 +2288,7 @@ impl IslandApp {
             // 有新版本：设置菜单右上角一个小绿点，提示里面有更新
             if self.upd_ver.is_some() {
                 let bc = egui::pos2(item.right() - 9.0, item.top() + 9.0);
-                self.paint_update_mark(&painter, bc, 11.0, false);
+                self.paint_update_mark(&painter, bc, 11.5, false);
             }
         }
 
