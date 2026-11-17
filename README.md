@@ -1,8 +1,12 @@
-# 灵岛 LingDao · Windows 灵动岛
+# i岛 LingDao · Windows 灵动岛
 
-对标开源项目 **岛仔 (Renly1994/xiaotang-daozai)** 的自研实现：**Rust + egui/eframe 0.31**（glow/OpenGL 后端），无 Electron、无 MSVC 依赖。
+**i岛**是一个原创开源项目：使用 **Rust + egui/eframe 0.31**（glow/OpenGL 后端）从零实现的 Windows 顶部灵动岛桌面音乐伴侣——无 Electron、无 MSVC 依赖，单文件轻量运行。
 
-当前版本：**音乐模块**（网易云音乐为主）+ 桌面音乐托盘图标 + 顶部吸附可拖动刘海。
+支持系统级媒体信息（Windows SMTC）、网易云音乐 / 汽水音乐实时歌词、逐字卡拉 OK 高亮、毛玻璃展开/收起动画与桌面托盘控制。
+
+> 项目主页：https://github.com/lmf0828/MyIsle · 下载：https://github.com/lmf0828/MyIsle/releases/latest
+
+当前版本：**音乐模块** + 桌面音乐托盘图标 + 顶部吸附可拖动刘海。
 
 ---
 
