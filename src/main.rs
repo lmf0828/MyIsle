@@ -1796,9 +1796,15 @@ impl IslandApp {
 
         // 圆盘三层：最外灰环 / 中间黑胶（带细音纹）/ 最中间圆形封面
         let tt_size = 150.0;
-        let tt_rect = egui::Rect::from_min_size(egui::pos2(cx0, rect.top() + CONTENT_PAD_T), egui::vec2(tt_size, tt_size));
-        let dc = tt_rect.center();
         let outer_r = 68.0 / 180.0 * tt_size; // 最外层灰环外径
+        // 唱片区 150x150 的方框里有透明留白（外环半径 < 半个方框）。要让「看得见的圆盘边缘」
+        // 与内容区左/上边距完全相等，就把方框整体向 左/上 挪掉这圈留白。
+        let disc_pad = tt_size * 0.5 - outer_r;
+        let tt_rect = egui::Rect::from_min_size(
+            egui::pos2(cx0 - disc_pad, rect.top() + CONTENT_PAD_T - disc_pad),
+            egui::vec2(tt_size, tt_size),
+        );
+        let dc = tt_rect.center();
         let vinyl_r = 64.2 / 180.0 * tt_size; // 黑胶半径（灰环再细约2px）
         let cover_r = 46.6 / 180.0 * tt_size; // 中心封面半径（再放大 ~3px 物理）
         // 1) 最外灰色环
@@ -2006,7 +2012,9 @@ impl IslandApp {
         let row_h = 22.0f32;
         let vtop = rect.top() + CONTENT_PAD_T + 146.0;
         let vbot = rect.bottom() - CONTENT_PAD_B;
-        let lyric_rect = egui::Rect::from_min_max(egui::pos2(cx0, vtop), egui::pos2(cx1, vbot));
+        // 歌词与「圆盘+信息」共用同一条视觉中线：左边也去掉圆盘方框的透明留白。
+        let lx0 = cx0 - disc_pad;
+        let lyric_rect = egui::Rect::from_min_max(egui::pos2(lx0, vtop), egui::pos2(cx1, vbot));
         let view_h = (vbot - vtop).max(row_h);
         let rows = ((view_h / row_h).floor() as i32).max(1);
         let grid_top = vtop + (view_h - rows as f32 * row_h) * 0.5;
@@ -2083,7 +2091,7 @@ impl IslandApp {
                 if y + row_h <= vtop + 0.5 {
                     continue;
                 }
-                let lrect = egui::Rect::from_min_size(egui::pos2(cx0, y), egui::vec2(cx1 - cx0, row_h));
+                let lrect = egui::Rect::from_min_size(egui::pos2(lx0, y), egui::vec2(cx1 - lx0, row_h));
                 // 当前句的逐字渐绿/进度始终随歌正常渲染，不受滚动/回位动画影响
                 let at_current = i == ci;
                 if at_current {
@@ -2098,7 +2106,7 @@ impl IslandApp {
             }
         } else {
             let hint = if self.lyr_done { "暂无歌词" } else { "歌词加载中…" };
-            painter.text(egui::pos2((cx0 + cx1) * 0.5, center_y), egui::Align2::CENTER_CENTER, hint, egui::FontId::proportional(13.0), egui::Color32::from_rgba_unmultiplied(120, 196, 160, a));
+            painter.text(egui::pos2((lx0 + cx1) * 0.5, center_y), egui::Align2::CENTER_CENTER, hint, egui::FontId::proportional(13.0), egui::Color32::from_rgba_unmultiplied(120, 196, 160, a));
         }
     }
 
