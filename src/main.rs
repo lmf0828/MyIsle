@@ -795,10 +795,6 @@ struct IslandApp {
     upd_last_check: Instant,
     upd_rx: Option<std::sync::mpsc::Receiver<Result<Option<update::Manifest>, String>>>,
     upd_inst_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
-    /// 用户点「一键修复」后用于显示「正在修复…」的时间戳。
-    soda_repair_at: Instant,
-    /// 用户点「还原官方原版」后用于显示「正在还原…」的时间戳。
-    soda_restore_at: Instant,
 }
 
 impl IslandApp {
@@ -936,8 +932,8 @@ impl IslandApp {
             upd_last_check: Instant::now() - Duration::from_secs(5 * 3600),
             upd_rx: None,
             upd_inst_rx: None,
-            soda_repair_at: Instant::now() - Duration::from_secs(3600),
-            soda_restore_at: Instant::now() - Duration::from_secs(3600),
+    
+    
         }
     }
 
@@ -2434,7 +2430,7 @@ impl IslandApp {
         let list_top = content.top() + header_h;
         let list_bottom = content.bottom() - CONTENT_PAD_B;
         let view_h = (list_bottom - list_top).max(1.0);
-        let total_h = label_h * 2.0 + row_h * 7.0;
+        let total_h = label_h * 2.0 + row_h * 4.0;
         let max_scroll = (total_h - view_h).max(0.0);
         if let Some(ph) = ui.ctx().pointer_hover_pos() {
             if full.contains(ph) && max_scroll > 0.0 {
@@ -2504,91 +2500,6 @@ impl IslandApp {
                     self.start_update_check();
                 }
             }
-        }
-        y += row_h;
-
-        // 汽水连接状态（未连接时可点「一键修复」：自动关闭汽水→重打补丁→重新拉起）
-        row_label(painter, y, "汽水连接", ink);
-        {
-            let repairing = self.soda_repair_at.elapsed() < Duration::from_secs(20);
-            let disabled = crate::soda_patch::patch_disabled();
-            let (running, cdp) = crate::soda_patch::status_cached();
-            let (txt, col, clickable) = if repairing {
-                ("正在修复…".to_string(), accent, false)
-            } else if disabled {
-                ("已还原官方原版 · 点击启用歌词 ›".to_string(), muted2, true)
-            } else if running && cdp {
-                ("运行中 · 歌词已连接".to_string(), accent, false)
-            } else if running {
-                ("未连接 · 点击修复 ›".to_string(), egui::Color32::from_rgba_unmultiplied(224, 178, 92, a), true)
-            } else {
-                ("未运行 · 点击启动修复 ›".to_string(), muted2, true)
-            };
-            let hit = egui::Rect::from_min_max(
-                egui::pos2(right - 210.0, y + 2.0),
-                egui::pos2(right, y + row_h - 2.0),
-            );
-            let resp = ui.interact(hit, ui.id().with("soda_repair_row"), egui::Sense::click());
-            let resp = if clickable { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
-            painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, egui::FontId::proportional(10.5), col);
-            if clickable && resp.clicked() {
-                self.soda_repair_at = Instant::now();
-                if disabled {
-                    let _ = crate::soda_patch::spawn_enable_patch();
-                } else {
-                    let _ = crate::soda_patch::spawn_repair();
-                }
-            }
-        }
-        y += row_h;
-
-        // 汽水补丁：可一键还原官方原版（之后不再自动打补丁），也可重新启用
-        row_label(painter, y, "汽水补丁", ink);
-        {
-            let restoring = self.soda_restore_at.elapsed() < Duration::from_secs(25);
-            let disabled = crate::soda_patch::patch_disabled();
-            let has_backup = crate::soda_patch::backup_available();
-            let (txt, col, clickable) = if restoring {
-                ("正在还原官方原版…".to_string(), accent, false)
-            } else if !has_backup {
-                ("无原版备份（不可还原）".to_string(), muted2, false)
-            } else if disabled {
-                ("已还原官方原版 · 点击重新启用 ›".to_string(), muted2, true)
-            } else {
-                ("已启用 · 还原官方原版 ›".to_string(), muted2, true)
-            };
-            let hit = egui::Rect::from_min_max(
-                egui::pos2(right - 210.0, y + 2.0),
-                egui::pos2(right, y + row_h - 2.0),
-            );
-            let resp = ui.interact(hit, ui.id().with("soda_restore_row"), egui::Sense::click());
-            let resp = if clickable { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
-            painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, egui::FontId::proportional(10.5), col);
-            if clickable && resp.clicked() {
-                if disabled {
-                    self.soda_repair_at = Instant::now();
-                    let _ = crate::soda_patch::spawn_enable_patch();
-                } else {
-                    self.soda_restore_at = Instant::now();
-                    let _ = crate::soda_patch::spawn_restore();
-                }
-            }
-        }
-        y += row_h;
-
-        // 网易云连接状态（只展示）
-        row_label(painter, y, "网易云连接", ink);
-        {
-            let running = crate::platform::process_running("cloudmusic.exe");
-            let live = crate::platform::netease_posdur_cached().is_some();
-            let (txt, col) = if running && live {
-                ("运行中 · 歌词/进度已连接".to_string(), accent)
-            } else if running {
-                ("运行中 · 等待播放".to_string(), egui::Color32::from_rgba_unmultiplied(224, 178, 92, a))
-            } else {
-                ("未运行".to_string(), muted2)
-            };
-            painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, egui::FontId::proportional(10.5), col);
         }
         y += row_h;
 

@@ -339,9 +339,6 @@ pub fn spawn_enable_patch() -> Result<(), String> {
 /// 需要时自动打补丁。返回 Ok(true)=本次新打了补丁；Ok(false)=本来就有补丁；
 /// Err=失败（例如文件被占用）。
 pub fn ensure_patched() -> Result<bool, String> {
-    if patch_disabled() {
-        return Err("用户已选择还原汽水官方原版".into());
-    }
     let Some(asar) = find_asar() else { return Err("找不到汽水 app.asar".into()) };
     let (patched, entry) = inspect(&asar)?;
     if patched {
@@ -491,10 +488,6 @@ pub fn spawn_repair() -> Result<(), String> {
 /// 启动时调用一次：确保补丁可用。汽水在运行但补丁缺失时，自动重启一次把它补好；
 /// 若补丁已在、只是 CDP 还没热起来，则不动它（留给 tick 处理）。
 pub fn boot_check() {
-    if patch_disabled() {
-        dlog("boot: patch disabled by user (restored official asar)");
-        return;
-    }
     if !soda_running() {
         match ensure_patched() {
             Ok(true) => dlog("boot: soda patch applied (not running)"),
@@ -525,9 +518,6 @@ pub fn boot_check() {
 /// - 已打补丁但 CDP 不通（通常是刚打补丁还没重启）→ 未在播放时重启让它生效；
 /// 播放中则等暂停后再重启，避免正听着被打断。
 pub fn tick(playing: bool) {
-    if patch_disabled() {
-        return;
-    }
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
     static LAST_RESTART: Mutex<Option<Instant>> = Mutex::new(None);
     let now = Instant::now();
