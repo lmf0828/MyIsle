@@ -171,7 +171,7 @@ pub fn download_setup(m: &Manifest) -> Result<PathBuf, String> {
     }
     let name = m
         .url
-        .rsplit('/')
+        .rsplit(|c| c == '/' || c == '\\')
         .next()
         .filter(|s| s.to_lowercase().ends_with(".exe"))
         .unwrap_or("LingDao-Setup.exe");
@@ -220,6 +220,28 @@ mod tests {
         assert_eq!(m.version, "0.2.0");
         assert!(m.mandatory);
         assert_eq!(m.size, 5);
+    }
+
+    #[test]
+    #[ignore]
+    fn probe_download_local() {
+        let src = std::env::temp_dir().join("lingdao_upd_src.exe");
+        std::fs::write(&src, b"MZ fake installer bytes for test").unwrap();
+        let sha = sha256_file(&src).unwrap();
+        let m = Manifest {
+            version: "0.0.9".into(),
+            notes: "t".into(),
+            url: format!("file://{}", src.display()),
+            sha256: sha,
+            size: 0,
+            mandatory: false,
+        };
+        let got = download_setup(&m).expect("download");
+        assert!(got.is_file());
+        assert_eq!(std::fs::read(&got).unwrap(), b"MZ fake installer bytes for test");
+        println!("downloaded {} ({} bytes)", got.display(), got.metadata().unwrap().len());
+        let _ = std::fs::remove_file(&got);
+        let _ = std::fs::remove_file(&src);
     }
 
     #[test]
