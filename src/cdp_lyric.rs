@@ -189,6 +189,7 @@ pub struct SodaLyric {
     pub duration: f64, // 秒
     pub content: String,
     pub cn: String,
+    pub cover: String,
 }
 
 fn evaluate(expr: &str) -> Option<serde_json::Value> {
@@ -232,8 +233,11 @@ const EXPR: &str = r#"(()=>{
  if(!t) return {ok:false,why:'nolyricview'};
  const lyr=t.props.lyric, tr=t.props.track||{};
  const arts=(tr.artists||[]).map(a=>a&&a.name).filter(Boolean).join(', ');
+ const uc=(tr.album&&tr.album.url_cover)||{};
+ let cover='';
+ if(uc&&uc.uri){ const base=(uc.urls&&uc.urls[0])||'https://p3-luna.douyinpic.com/img/'; const tpl=uc.template_prefix||'tplv-b829550vbb'; cover=base+uc.uri+'~'+tpl+'-crop-center:400:400.jpg'; }
  return {ok:true,name:tr.name||'',artist:arts,duration:(tr.duration||0)/1000,
-   content:lyr.content||'',cn:(lyr.translations&&lyr.translations.cn)||''};
+   content:lyr.content||'',cn:(lyr.translations&&lyr.translations.cn)||'',cover:cover};
 })()"#;
 
 fn norm(s: &str) -> String {
@@ -269,6 +273,7 @@ pub fn fetch_current(title: &str, artist: &str) -> Option<SodaLyric> {
                             duration: o.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
                             content,
                             cn: o.get("cn").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            cover: o.get("cover").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                         });
                         break;
                     }

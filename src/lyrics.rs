@@ -572,7 +572,17 @@ fn fetch_remote(
                         .collect();
                     let _ = std::fs::write(d.join(format!("{}.soda.lrc", key)), body);
                 }
-                let cover = netease_cover_only(title, artist, expected_dur);
+                let mut cover = if !sl.cover.is_empty() {
+                    get_bytes(&sl.cover)
+                } else {
+                    None
+                };
+                if cover.is_none() {
+                    cover = netease_cover_only(title, artist, expected_dur);
+                }
+                if let (Some(d), Some(c)) = (dir, cover.as_ref()) {
+                    let _ = std::fs::write(d.join(format!("{}.cover", key)), c);
+                }
                 return (Some(l), cover);
             }
         }
