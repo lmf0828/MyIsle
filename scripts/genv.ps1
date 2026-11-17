@@ -1,4 +1,4 @@
-# LingDao Rust 构建环境（winlibs MSVCRT mingw-w64 + 共用 cargo/rustup on D:）
+# MyIsle Rust 构建环境（winlibs MSVCRT mingw-w64 + 共用 cargo/rustup on D:）
 # 用法： . D:\LingDao\scripts\genv.ps1
 $env:CARGO_HOME='D:\rust\cargo'
 $env:RUSTUP_HOME='D:\rust\rustup'

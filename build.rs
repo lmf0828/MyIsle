@@ -1,4 +1,4 @@
-//! Embed the 'i岛' icon + version info into the exe (RT_GROUP_ICON / VERSIONINFO).
+//! Embed the 'MyIsle' icon + version info into the exe (RT_GROUP_ICON / VERSIONINFO).
 //! Uses the mingw-w64 `windres` that ships with the toolchain configured in genv.ps1,
 //! so no Windows SDK / rc.exe is required.
 use std::env;

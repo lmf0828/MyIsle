@@ -1,11 +1,11 @@
-# i岛 LingDao · Windows 灵动岛
+# MyIsle · Windows 灵动岛
 
 [![Release](https://img.shields.io/github/v/release/lmf0828/MyIsle?display_name=tag&sort=semver)](https://github.com/lmf0828/MyIsle/releases/latest)
 [![License](https://img.shields.io/github/license/lmf0828/MyIsle)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
 ![Rust](https://img.shields.io/badge/language-Rust-orange)
 
-**i岛**是一个原创开源项目：使用 **Rust + egui/eframe 0.31**（glow/OpenGL 后端）从零实现的 Windows 顶部灵动岛桌面音乐伴侣——无 Electron、无 MSVC 依赖，单文件轻量运行。
+**MyIsle**是一个原创开源项目：使用 **Rust + egui/eframe 0.31**（glow/OpenGL 后端）从零实现的 Windows 顶部灵动岛桌面音乐伴侣——无 Electron、无 MSVC 依赖，单文件轻量运行。
 
 支持系统级媒体信息（Windows SMTC）、网易云音乐 / 汽水音乐实时歌词、逐字卡拉 OK 高亮、毛玻璃展开/收起动画与桌面托盘控制。
 
@@ -19,7 +19,7 @@
 
 ```
 D:\LingDao\
-  LingDao.exe          运行中的程序（部署产物，双击/开机自启即用）
+  MyIsle.exe          运行中的程序（部署产物，双击/开机自启即用）
   data\                运行时数据（配置/缓存/日志/偏移表），程序自动创建
   Cargo.toml / Cargo.lock
   src\
@@ -41,7 +41,7 @@ D:\LingDao\
 ## 构建 / 部署
 
 ```powershell
-# 一键：编译 + 停旧进程 + 覆盖 D:\LingDao\LingDao.exe + 重启
+# 一键：编译 + 停旧进程 + 覆盖 D:\LingDao\MyIsle.exe + 重启
 powershell -ExecutionPolicy Bypass -File D:\LingDao\scripts\build.ps1
 
 # 只编译
@@ -52,7 +52,7 @@ cargo build --release
 
 要点：
 - 工具链是 **stable-x86_64-pc-windows-gnu**（mingw-w64，winlibs MSVCRT），装在 `D:\rust`；`genv.ps1` 里配好 CARGO_HOME / RUSTUP_HOME / CC / AR，并**清空代理环境变量**（本机代理 7890 不通，cargo 必须直连）。
-- **覆盖 exe 前必须先 `Stop-Process LingDao`**，否则报“文件正由另一进程使用”。
+- **覆盖 exe 前必须先 `Stop-Process MyIsle`**，否则报“文件正由另一进程使用”。
 - 首次编译约 2 分钟，增量约 5–10 秒。
 
 ---
@@ -66,7 +66,7 @@ cargo build --release
 - **拖动**：按住岛顶部 16 逻辑像素拖动，松手带缓动"轻回弹"吸附到顶部，横向位置按 `x_frac` 记忆。
 - **数据源**：网易云音乐 SMTC 元数据 + `cloudmusic.dll` 内存 position/duration（支持最小化/重启后自动对齐；偏移**自动发现并持久化**到 `data\netease_offsets.txt`）+ 网易云 LRC/YRC 歌词与专辑封面（按时长选版本，避免同名不同版本错位）。
 - **VIP 试听时长**：VIP 歌常只给 30~40s 试听片段，播放器上报的 duration 是**片段时长**。歌词选版/缩放一律用 `durations.txt` 里 `song/detail` 的完整时长（≥60s），绝不按试听片段等比压缩完整歌词（否则整首歌词会挤成一团、乱跳）；进度条仍按实际片段时长走。旧的“被压扁”坏缓存会被自动识别并重新拉取。若试听片段不是从 0 开始（例如直接从副歌起播），程序会从网易云进程内存日志里的 `freeTrialInfo.start` 读出片段在整首歌里的起点，把它加到播放位置后再匹配歌词，保证高亮行与歌声对齐（非试听歌曲不受影响）。
-- 单实例（命名互斥体）、开机自启（`HKCU\...\Run` 带 `--autostart`，写入项名 LingDao）。
+- 单实例（命名互斥体）、开机自启（`HKCU\...\Run` 带 `--autostart`，写入项名 MyIsle）。
 
 ---
 
@@ -98,24 +98,24 @@ cargo build --release
 9. **网易云歌词按 song id 取（不再靠歌名搜索）**：`src/netease_mem.rs::current_song_id` 从客户端本地播放队列 `%LOCALAPPDATA%\Netease\CloudMusic\webdata\file\playingList`（JSON，每项含 `track.id/name/artists[].name/duration(ms)`，播放时实时更新）里，用 SMTC 的「歌名+歌手+时长(±5s)」精确命中当前歌曲，拿到确切 `id` 后调 `/api/song/lyric?id=<id>`。这样同名/翻唱/伴奏不会再错配（如 Keep the Roses 曾被贴成 Laleh 的 roses）。队列里找不到才回退到歌名搜索（带时长闸门）。
 10. **汽水 CDP 破解读官方歌词（关键，已改汽水安装文件）**：汽水是 Electron，但直接用 `--remote-debugging-port` 会被它**丢弃参数**（launcher）或因 DSH 环境里的 `ELECTRON_RUN_AS_NODE=1` 被继承当成 Node 运行而秒退。现做法：给 `D:\qishuiMusic\App\Soda Music\3.8.0\resources\app.asar` 打补丁，在 `entry.js` 顶部前插
     `try{const {app}=require("electron");app.commandLine.appendSwitch("remote-debugging-port","9222");app.commandLine.appendSwitch("remote-allow-origins","*");}catch(e){}`
-    然后 `@electron/asar pack ... --unpack "*.node"` 重新打包覆盖（原文件备份在 `D:\LingDao\data\app.asar.bak`，约 8.9MB；`app.asar.unpacked\` 目录不要动）。此后**正常用桌面快捷方式启动汽水即可**，本机 `http://127.0.0.1:9222/json/list` 会出现 3 个 page target，主页面是 `app://resources/main.asar/main.html`。岛通过这些 target 的 WebSocket 执行 `Runtime.evaluate` 读 `LyricsView.props.lyric`。调试脚本：`D:\node\node.exe D:\LingDao\scripts\cdp_eval.js "<JS表达式>" [target子串]`。**自动修复（`src\soda_patch.rs`）**：灵岛运行时每 15s 自检——发现 `app.asar` 里没有调试端口补丁（典型场景：汽水自动更新覆盖了补丁）就**自动重打包补回**（纯 Rust 实现 asar 读写，不依赖 node，日志写 `data\soda_patch.log`，打补丁前自动把原版备份到 `data\app.asar.bak`）。
+    然后 `@electron/asar pack ... --unpack "*.node"` 重新打包覆盖（原文件备份在 `D:\LingDao\data\app.asar.bak`，约 8.9MB；`app.asar.unpacked\` 目录不要动）。此后**正常用桌面快捷方式启动汽水即可**，本机 `http://127.0.0.1:9222/json/list` 会出现 3 个 page target，主页面是 `app://resources/main.asar/main.html`。岛通过这些 target 的 WebSocket 执行 `Runtime.evaluate` 读 `LyricsView.props.lyric`。调试脚本：`D:\node\node.exe D:\LingDao\scripts\cdp_eval.js "<JS表达式>" [target子串]`。**自动修复（`src\soda_patch.rs`）**：MyIsle运行时每 15s 自检——发现 `app.asar` 里没有调试端口补丁（典型场景：汽水自动更新覆盖了补丁）就**自动重打包补回**（纯 Rust 实现 asar 读写，不依赖 node，日志写 `data\soda_patch.log`，打补丁前自动把原版备份到 `data\app.asar.bak`）。
   - 注意：汽水运行时会**独占锁定 app.asar**，所以补丁只能在汽水关闭时写入。因此未打补丁且汽水在运行时，会自动「关闭汽水 → 打补丁 → 重新拉起」——一次更新只打断这一次，之后长期有效。
   - 若补丁已写入但 CDP 还没生效（刚补完没重启）：未在播放时自动重启汽水；正在播放则等暂停后再重启，不打断听歌。
-  - 设置 `LINGDAO_SODA_FORCE_RESTART=1` 可强制播放中也重启；`SODA_HOME` 可指定汽水安装根目录（默认扫 `D:\qishuiMusic\App\Soda Music\*` 和 `%LOCALAPPDATA%\Programs\SodaMusic`，按版本号取最新）。CDP 端口只监听 127.0.0.1，勿改成 0.0.0.0。
+  - 设置 `MYISLE_SODA_FORCE_RESTART=1` 可强制播放中也重启；`SODA_HOME` 可指定汽水安装根目录（默认扫 `D:\qishuiMusic\App\Soda Music\*` 和 `%LOCALAPPDATA%\Programs\SodaMusic`，按版本号取最新）。CDP 端口只监听 127.0.0.1，勿改成 0.0.0.0。
   - **托盘也不掉帧**：补丁里同时注入了 `--disable-background-timer-throttling`、`--disable-renderer-backgrounding`、`--disable-backgrounding-occluded-windows`、`--disable-features=CalculateNativeWinOcclusion`，所以汽水缩到托盘/隐藏时渲染进程不被节流，CDP 读到的时间与歌词继续推进（实测隐藏 10s，进度正好走 10s）。
-  - **启动即自愈**：灵岛启动时 `soda_patch::boot_check()` 若发现汽水在运行但补丁缺失（比如更新后），会自动关一次汽水→重打补丁→重新拉起；已打补丁但 CDP 持续 60s 不通（渲染进程崩了）也会强制重启一次。全程无需用户操作。
+  - **启动即自愈**：MyIsle启动时 `soda_patch::boot_check()` 若发现汽水在运行但补丁缺失（比如更新后），会自动关一次汽水→重打补丁→重新拉起；已打补丁但 CDP 持续 60s 不通（渲染进程崩了）也会强制重启一次。全程无需用户操作。
   - **网易云同样全自动**：`platform::start_netease_reader()` 每 200ms 直接读 `cloudmusic.dll` 内存里的 position/duration（最小化/托盘精确），版本更新导致偏移失效时后台 `netease_ensure_offsets()` 用两次快照差自动重新发现偏移，不用人工改；歌词按本地播放队列里的 song id 精确取（`netease_mem`）。
 
 ---
 
 ## 调试钩子（环境变量）
 
-- `LINGDAO_DEMO="歌名|歌手"`：注入虚拟曲目（无播放器时看 UI）
-- `LINGDAO_LONG="一段很长的歌词"`：注入超长歌词测跑马灯
-- `LINGDAO_FAKE_LYRICS=1`：注入 8 句假歌词（每 2.5s 换行，配合 `LINGDAO_DEMO` 可无播放器预览收起态歌词上滚动画）
-- `LINGDAO_PAGE=settings|weather`：启动后展开即自动打开对应页面（截图/调试用；设置页可免手点齿轮）
-- `LINGDAO_LYRIC_TEST="歌名|歌手"`：只抓歌词并打印 `lines=N` 后退出
-- `LINGDAO_OFFSET_SCAN=1`：启动时强制重扫网易云内存偏移
+- `MYISLE_DEMO="歌名|歌手"`：注入虚拟曲目（无播放器时看 UI）
+- `MYISLE_LONG="一段很长的歌词"`：注入超长歌词测跑马灯
+- `MYISLE_FAKE_LYRICS=1`：注入 8 句假歌词（每 2.5s 换行，配合 `MYISLE_DEMO` 可无播放器预览收起态歌词上滚动画）
+- `MYISLE_PAGE=settings|weather`：启动后展开即自动打开对应页面（截图/调试用；设置页可免手点齿轮）
+- `MYISLE_LYRIC_TEST="歌名|歌手"`：只抓歌词并打印 `lines=N` 后退出
+- `MYISLE_OFFSET_SCAN=1`：启动时强制重扫网易云内存偏移
 
 ---
 
@@ -132,11 +132,11 @@ cargo build --release
 - 有更新时：展开态内容区右上角显示「发现新版本 vX · 立即更新」胶囊，点击即下载并静默安装重启；收起态右端显示一个小绿点提示。
 
 - **本地打包**：`powershell -ExecutionPolicy Bypass -File scripts\pack.ps1 -Version 0.2.0 -Repo owner/repo`
-  - 产物在 `dist\`：`LingDao-<ver>-portable.zip`、`LingDao-Setup-<ver>.exe`（需安装 Inno Setup 6）、`latest.json`。
+  - 产物在 `dist\`：`MyIsle-<ver>-portable.zip`、`MyIsle-Setup-<ver>.exe`（需安装 Inno Setup 6）、`latest.json`。
   - `scripts\set_version.ps1` 会同步更新 `Cargo.toml` 与 `app.rc` 的版本号。
 - **GitHub 自动发布**：打 tag 即可，例如 `git tag v0.2.0 && git push origin v0.2.0`。
   - `.github/workflows/release.yml` 在 windows-latest 上构建、跑测试、生成绿色版 zip、Inno 安装包、`latest.json`，并上传到 Release。
-  - 构建时注入 `LINGDAO_REPO=${{ github.repository }}`，客户端据此拼 `https://github.com/<repo>/releases/latest/download/latest.json`。
+  - 构建时注入 `MYISLE_REPO=${{ github.repository }}`，客户端据此拼 `https://github.com/<repo>/releases/latest/download/latest.json`。
 - **代码签名**：见 `docs/SIGNING.md`（配置 `WINDOWS_PFX_BASE64` / `WINDOWS_PFX_PASSWORD` 两个 Secret 后，CI 自动签名 exe 和安装包）。
 - **客户端更新**：`src/update.rs` 启动 5s 后首查、此后每 4h；`设置 → 通用 → 软件更新` 显示版本/检查/下载/安装；安装器以 `/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS` 运行。
-- **数据目录**：发布版用 `%APPDATA%\LingDao\data`；开发/绿色版若 exe 同目录已有 `data\` 则沿用；可用 `LINGDAO_DATA_DIR` 覆盖、`LINGDAO_PORTABLE=1` 强制本地 data。
+- **数据目录**：发布版用 `%APPDATA%\MyIsle\data`；开发/绿色版若 exe 同目录已有 `data\` 则沿用；可用 `MYISLE_DATA_DIR` 覆盖、`MYISLE_PORTABLE=1` 强制本地 data。

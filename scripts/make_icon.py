@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Generate the 'i岛' brand icon: lowercase 'i' (sun-dot + stem) standing on a
+"""Generate the 'MyIsle' brand icon: lowercase 'i' (sun-dot + stem) standing on a
 small island mound with a teal water reflection, inside a rounded dark app tile."""
 import os
 import numpy as np

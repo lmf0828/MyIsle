@@ -1,12 +1,12 @@
 //! 应用内更新：检查 GitHub Release 的 latest.json、下载安装包、校验并启动安装器。
 //!
 //! 清单地址优先级：
-//!   1. 环境变量 `LINGDAO_UPDATE_URL`（可为 http(s) 或本地文件路径，方便测试）
-//!   2. 编译期 `LINGDAO_REPO`（CI 注入 `owner/repo`）→
+//!   1. 环境变量 `MYISLE_UPDATE_URL`（可为 http(s) 或本地文件路径，方便测试）
+//!   2. 编译期 `MYISLE_REPO`（CI 注入 `owner/repo`）→
 //!      https://github.com/<owner>/<repo>/releases/latest/download/latest.json
 //!
 //! latest.json 结构：
-//! { "version":"0.2.0", "notes":"...", "url":"https://.../LingDao-Setup-0.2.0.exe",
+//! { "version":"0.2.0", "notes":"...", "url":"https://.../MyIsle-Setup-0.2.0.exe",
 //!   "sha256":"...", "size":12345678, "mandatory":false, "pub_date":"2026-11-20" }
 
 use serde_json::Value;
@@ -27,9 +27,9 @@ pub struct Manifest {
 }
 
 fn repo_slug() -> Option<String> {
-    let r = std::env::var("LINGDAO_REPO")
+    let r = std::env::var("MYISLE_REPO")
         .ok()
-        .or_else(|| option_env!("LINGDAO_REPO").map(|s| s.to_string()))?;
+        .or_else(|| option_env!("MYISLE_REPO").map(|s| s.to_string()))?;
     let r = r.trim().to_string();
     if r.is_empty() || r.contains("YOUR_") {
         None
@@ -40,7 +40,7 @@ fn repo_slug() -> Option<String> {
 
 /// 返回清单 URL；没有配置仓库时返回 None（开发版默认不联网检查）。
 pub fn manifest_url() -> Option<String> {
-    if let Ok(u) = std::env::var("LINGDAO_UPDATE_URL") {
+    if let Ok(u) = std::env::var("MYISLE_UPDATE_URL") {
         if !u.trim().is_empty() {
             return Some(u.trim().to_string());
         }
@@ -174,7 +174,7 @@ pub fn download_setup(m: &Manifest) -> Result<PathBuf, String> {
         .rsplit(|c| c == '/' || c == '\\')
         .next()
         .filter(|s| s.to_lowercase().ends_with(".exe"))
-        .unwrap_or("LingDao-Setup.exe");
+        .unwrap_or("MyIsle-Setup.exe");
     let dest = upd_dir().join(format!("{}-{}", m.version, name));
     let tmp = dest.with_extension("part");
     download(&m.url, &tmp)?;
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     #[ignore]
     fn probe_download_local() {
-        let src = std::env::temp_dir().join("lingdao_upd_src.exe");
+        let src = std::env::temp_dir().join("myisle_upd_src.exe");
         std::fs::write(&src, b"MZ fake installer bytes for test").unwrap();
         let sha = sha256_file(&src).unwrap();
         let m = Manifest {
@@ -287,7 +287,7 @@ mod tests {
             }
         };
         println!("DOWNLOADED {}", setup.display());
-        let dir = std::env::temp_dir().join("lingdao_upd_install_test");
+        let dir = std::env::temp_dir().join("myisle_upd_install_test");
         let _ = std::fs::remove_dir_all(&dir);
         let st = std::process::Command::new(&setup)
             .arg("/VERYSILENT")
@@ -297,7 +297,7 @@ mod tests {
             .arg(format!("/DIR={}", dir.display()))
             .status();
         println!("SETUP_STATUS {:?}", st);
-        let exe = dir.join("LingDao.exe");
+        let exe = dir.join("MyIsle.exe");
         if exe.is_file() {
             println!("INSTALLED size={}", exe.metadata().map(|x| x.len()).unwrap_or(0));
             let _ = std::process::Command::new(dir.join("unins000.exe"))

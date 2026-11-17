@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-//! i岛 —?对标岛仔?Windows 灵动岛?
+//! MyIsle —??Windows 灵动岛?
 //! 技术栈：Rust + eframe/egui(glow) + 原始 Win32/DWM FFI + 系统托盘(tray-icon)?
 //! 交互：托盘小图标 ?弹出设置面板；关闭面??隐藏到托?/ 彻底退出?
 
@@ -381,7 +381,7 @@ impl Config {
 
     fn save(&self) {
         let text = format!(
-            "# i岛 配置\nposition={}\nx_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\n",
+            "# MyIsle 配置\nposition={}\nx_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\n",
             self.position.as_str(),
             self.x_frac,
             self.font,
@@ -416,11 +416,11 @@ fn set_autostart(on: bool) {
     if on {
         let val = format!("\"{}\" --autostart", exe);
         let _ = std::process::Command::new("reg")
-            .args(["add", key, "/v", "LingDao", "/t", "REG_SZ", "/d", &val, "/f"])
+            .args(["add", key, "/v", "MyIsle", "/t", "REG_SZ", "/d", &val, "/f"])
             .status();
     } else {
         let _ = std::process::Command::new("reg")
-            .args(["delete", key, "/v", "LingDao", "/f"])
+            .args(["delete", key, "/v", "MyIsle", "/f"])
             .status();
     }
 }
@@ -635,7 +635,7 @@ enum Module {
     Weather,
 }
 
-/// 仅用于调试钩子 LINGDAO_PAGE：启动后直接定位到某个视图。
+/// 仅用于调试钩子 MYISLE_PAGE：启动后直接定位到某个视图。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DbgView {
     Settings,
@@ -769,7 +769,7 @@ struct IslandApp {
     /// 音乐模块内的设置页是否展开（仅音乐模块有效）
     show_settings: bool,
     settings_scroll: f32,
-    /// 调试：LINGDAO_PAGE=settings/schedule/weather 时启动即定位对应视图（用于截图验证）
+    /// 调试：MYISLE_PAGE=settings/schedule/weather 时启动即定位对应视图（用于截图验证）
     dbg_page: Option<DbgView>,
     /// 左侧菜单选中项滑动动画：开始时刻 / 上一选中索引 / 上个模块
     rail_anim_at: Option<std::time::Instant>,
@@ -812,7 +812,7 @@ impl IslandApp {
             }
         });
         // SMTC 采用主线程非阻塞状态机（见 smtc.rs），无需后台线程。
-        let dbg_page = match std::env::var("LINGDAO_PAGE").ok().as_deref() {
+        let dbg_page = match std::env::var("MYISLE_PAGE").ok().as_deref() {
             Some("settings") => Some(DbgView::Settings),
             Some("schedule") => Some(DbgView::Schedule),
             Some("weather") => Some(DbgView::Weather),
@@ -927,7 +927,7 @@ impl IslandApp {
                 self.hwnd = w.hwnd.get();
                 platform::make_island(self.hwnd);
                 platform::install_erase_guard(self.hwnd);
-                if std::env::var_os("LINGDAO_LAYERED").is_some() {
+                if std::env::var_os("MYISLE_LAYERED").is_some() {
                     platform::set_layered(self.hwnd);
                 }
                 // 首次创建后先把客户区预填充成深色（背景刷已置空，避免首帧任何未定义底色）
@@ -1336,7 +1336,7 @@ impl IslandApp {
         if self.hwnd == 0 {
             return;
         }
-        if std::env::var_os("LINGDAO_NO_REGION").is_some() {
+        if std::env::var_os("MYISLE_NO_REGION").is_some() {
             if self.region != (0, 0, 0, 0, 0) {
                 platform::clear_window_region(self.hwnd);
                 self.region = (0, 0, 0, 0, 0);
@@ -2567,7 +2567,7 @@ impl IslandApp {
         // 无系统标题栏、可拖动、自绘；圆角交给 Win11 DWM，避免透明窗口四角发黑?
         let first = !self.settings_shown;
         let mut builder = egui::ViewportBuilder::default()
-            .with_title("i岛·设置")
+            .with_title("MyIsle 设置")
             .with_decorations(false)
             .with_resizable(false)
             .with_inner_size([440.0, 320.0])
@@ -2579,7 +2579,7 @@ impl IslandApp {
         }
 
         ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("lingdao_settings"),
+            egui::ViewportId::from_hash_of("myisle_settings"),
             builder,
             |ctx, _class| {
                 if ctx.input(|i| i.viewport().close_requested()) {
@@ -2602,7 +2602,7 @@ impl IslandApp {
                         p.text(
                             egui::pos2(rect.min.x + 32.0, rect.min.y + 26.0),
                             egui::Align2::LEFT_CENTER,
-                            "i岛",
+                            "MyIsle",
                             egui::FontId::proportional(15.0),
                             c.text,
                         );
@@ -2611,7 +2611,7 @@ impl IslandApp {
                             egui::pos2(rect.min.x, rect.min.y),
                             egui::pos2(rect.max.x - 48.0, rect.min.y + 48.0),
                         );
-                        let drag = ui.interact(header, egui::Id::new("lingdao_title_drag"), egui::Sense::drag());
+                        let drag = ui.interact(header, egui::Id::new("myisle_title_drag"), egui::Sense::drag());
                         if drag.drag_started() {
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                         }
@@ -2620,7 +2620,7 @@ impl IslandApp {
                             egui::pos2(rect.max.x - 42.0, rect.min.y + 12.0),
                             egui::vec2(30.0, 30.0),
                         );
-                        let cresp = ui.interact(btn, egui::Id::new("lingdao_close"), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let cresp = ui.interact(btn, egui::Id::new("myisle_close"), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
                         if cresp.hovered() {
                             p.rect_filled(btn, egui::CornerRadius::same(8), egui::Color32::from_rgb(238, 238, 240));
                         }
@@ -2638,7 +2638,7 @@ impl IslandApp {
                         p.text(
                             egui::pos2(cx, rect.min.y + 148.0),
                             egui::Align2::CENTER_CENTER,
-                            "i岛",
+                            "MyIsle",
                             egui::FontId::proportional(34.0),
                             c.text,
                         );
@@ -2660,7 +2660,7 @@ impl IslandApp {
 
                 // 关闭询问 —?应用内小模态（点空白处 / Esc 可取消）
                 if confirm_open {
-                    let resp = egui::Modal::new(egui::Id::new("lingdao_confirm_modal"))
+                    let resp = egui::Modal::new(egui::Id::new("myisle_confirm_modal"))
                         .frame(
                             egui::Frame::NONE
                                 .fill(c.bg)
@@ -2671,7 +2671,7 @@ impl IslandApp {
                         .show(ctx, |ui| {
                             ui.set_width(240.0);
                             ui.vertical_centered(|ui| {
-                                ui.label(egui::RichText::new("关闭 i岛").size(16.0).strong().color(c.text));
+                                ui.label(egui::RichText::new("关闭 MyIsle").size(16.0).strong().color(c.text));
                                 ui.add_space(6.0);
                                 ui.label(egui::RichText::new("隐藏到托盘，还是彻底退出？").size(12.0).color(c.muted));
                                 ui.add_space(14.0);
@@ -2716,7 +2716,7 @@ impl IslandApp {
 
         // ?Win11 DWM 给这个窗口加原生圆角（彻底去掉四角发黑）
         if !self.settings_shown {
-            let h = platform::find_process_window("i岛·设置");
+            let h = platform::find_process_window("MyIsle 设置");
             if h != 0 {
                 platform::set_round_corners(h);
                 platform::reveal_centered(h);
@@ -2789,8 +2789,8 @@ impl eframe::App for IslandApp {
                 crate::soda_patch::tick(self.music.playing);
             }
         }
-        // 调试：LINGDAO_DEMO="歌名|歌手" 时注入一条虚拟曲目，用于无播放器环境验证界面/动画
-        if let Ok(spec) = std::env::var("LINGDAO_DEMO") {
+        // 调试：MYISLE_DEMO="歌名|歌手" 时注入一条虚拟曲目，用于无播放器环境验证界面/动画
+        if let Ok(spec) = std::env::var("MYISLE_DEMO") {
             let mut it = spec.splitn(2, '|');
             let t = it.next().unwrap_or("Demo").to_string();
             let ar = it.next().unwrap_or("Demo Artist").to_string();
@@ -2805,7 +2805,7 @@ impl eframe::App for IslandApp {
             self.from_smtc = false;
             self.ui_playing = true;
         }
-        if let Ok(long) = std::env::var("LINGDAO_LONG") {
+        if let Ok(long) = std::env::var("MYISLE_LONG") {
             // 调试：注入一条超长“歌词”用于检查收起态跑马灯/渐绿渲染
             self.lyr_lines = vec![lyrics::LrcLine { t: 0.0, text: long, segs: Vec::new() }];
             self.lyr_key = "LONG".into();
@@ -3145,9 +3145,9 @@ impl eframe::App for IslandApp {
             }
         }
 
-        // 调试：LINGDAO_FAKE_LYRICS=1（配合 LINGDAO_DEMO）注入一组按时间推进的假歌词，
+        // 调试：MYISLE_FAKE_LYRICS=1（配合 MYISLE_DEMO）注入一组按时间推进的假歌词，
         // 用于无播放器环境预览收起态“上滚”动画。
-        if std::env::var_os("LINGDAO_FAKE_LYRICS").is_some() && self.lyr_lines.len() < 2 {
+        if std::env::var_os("MYISLE_FAKE_LYRICS").is_some() && self.lyr_lines.len() < 2 {
             let demo = [
                 "第一句 风继续吹不忍远离",
                 "第二句 心里极渴望希望留下伴着你",
@@ -3214,7 +3214,7 @@ impl eframe::App for IslandApp {
 
         self.handle_drag(ctx);
         self.drive_animation(ctx);
-        // 调试：展开后若指定了 LINGDAO_PAGE，定位对应视图
+        // 调试：展开后若指定了 MYISLE_PAGE，定位对应视图
         if let Some(p) = self.dbg_page {
             if self.expanded > 0.9 {
                 match p {
@@ -3333,8 +3333,8 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // 调试：LINGDAO_LYRIC_TEST="歌名|歌手" 时只跑歌词抓取并打印，不启动界面
-    if let Ok(spec) = std::env::var("LINGDAO_LYRIC_TEST") {
+    // 调试：MYISLE_LYRIC_TEST="歌名|歌手" 时只跑歌词抓取并打印，不启动界面
+    if let Ok(spec) = std::env::var("MYISLE_LYRIC_TEST") {
         let (t, a) = spec.split_once('|').unwrap_or((spec.as_str(), ""));
         match lyrics::fetch(t, a) {
             Some(v) => println!(
@@ -3353,7 +3353,7 @@ fn main() -> eframe::Result<()> {
 
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("i岛")
+            .with_title("MyIsle")
             .with_inner_size([W_EXPANDED + 2.0 * MARGIN, H_EXPANDED + 2.0 * MARGIN])
             .with_decorations(false)
             .with_transparent(true)
@@ -3364,7 +3364,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "i岛",
+        "MyIsle",
         opts,
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);

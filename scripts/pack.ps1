@@ -2,7 +2,7 @@
     [string]$Version = "",
     [string]$Repo = ""
 )
-# 本地/CI 通用打包：生成 dist/LingDao-<ver>-portable.zip（可选 Setup + latest.json）。
+# 本地/CI 通用打包：生成 dist/MyIsle-<ver>-portable.zip（可选 Setup + latest.json）。
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -18,20 +18,20 @@ if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force $dist | Out-Null
-Copy-Item (Join-Path $root 'target\release\lingdao.exe') (Join-Path $dist 'LingDao.exe') -Force
-$zip = Join-Path $dist "LingDao-$v-portable.zip"
+Copy-Item (Join-Path $root 'target\release\myisle.exe') (Join-Path $dist 'MyIsle.exe') -Force
+$zip = Join-Path $dist "MyIsle-$v-portable.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path (Join-Path $dist 'LingDao.exe') -DestinationPath $zip -Force
+Compress-Archive -Path (Join-Path $dist 'MyIsle.exe') -DestinationPath $zip -Force
 Write-Host "portable -> $zip"
 
-# Inno Setup（若已安装；也支持 LINGDAO_ISCC 指定路径，便于本地便携安装）
-$iscc = $env:LINGDAO_ISCC
+# Inno Setup（若已安装；也支持 MYISLE_ISCC 指定路径，便于本地便携安装）
+$iscc = $env:MYISLE_ISCC
 if (!$iscc) { $iscc = Join-Path $root 'data\InnoSetup\ISCC.exe' }
 if (!(Test-Path $iscc)) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
 if (!(Test-Path $iscc)) { $iscc = "$env:ProgramFiles\Inno Setup 6\ISCC.exe" }
-$setup = Join-Path $dist "LingDao-Setup-$v.exe"
+$setup = Join-Path $dist "MyIsle-Setup-$v.exe"
 if (Test-Path $iscc) {
-    & $iscc "/DAppVersion=$v" (Join-Path $root 'installer\LingDao.iss')
+    & $iscc "/DAppVersion=$v" (Join-Path $root 'installer\MyIsle.iss')
     if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
     Write-Host "installer -> $setup"
 } else {
@@ -44,8 +44,8 @@ if (Test-Path $setup) {
     if (!$Repo) { $Repo = '<owner>/<repo>' }
     $obj = [ordered]@{
         version   = $v
-        notes     = "i岛 v$v"
-        url       = "https://github.com/$Repo/releases/download/v$v/LingDao-Setup-$v.exe"
+        notes     = "MyIsle v$v"
+        url       = "https://github.com/$Repo/releases/download/v$v/MyIsle-Setup-$v.exe"
         sha256    = $hash
         size      = $size
         mandatory = $false

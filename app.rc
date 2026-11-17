@@ -3,8 +3,8 @@
 1 ICON "assets/island.ico"
 
 1 VERSIONINFO
- FILEVERSION 0,1,2,0
- PRODUCTVERSION 0,1,2,0
+ FILEVERSION 0,2,0,0
+ PRODUCTVERSION 0,2,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -15,12 +15,12 @@ BEGIN
     BEGIN
         BLOCK "080404b0"
         BEGIN
-            VALUE "FileDescription", "i岛 — Windows 灵动岛"
-            VALUE "InternalName", "LingDao"
-            VALUE "OriginalFilename", "LingDao.exe"
-            VALUE "ProductName", "i岛"
-            VALUE "ProductVersion", "0.1.2"
-            VALUE "FileVersion", "0.1.2"
+            VALUE "FileDescription", "MyIsle — Windows 灵动岛"
+            VALUE "InternalName", "MyIsle"
+            VALUE "OriginalFilename", "MyIsle.exe"
+            VALUE "ProductName", "MyIsle"
+            VALUE "ProductVersion", "0.2.0"
+            VALUE "FileVersion", "0.2.0"
         END
     END
     BLOCK "VarFileInfo"

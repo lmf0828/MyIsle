@@ -26,7 +26,7 @@ impl Tray {
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false) // 只有右键弹菜单（仅退出）；左键无动作
-            .with_tooltip("i岛")
+            .with_tooltip("MyIsle")
             .with_icon(icon)
             .build()
             .ok()?;

@@ -1,7 +1,11 @@
 [package]
-name = "lingdao"
-version = "0.1.2"
+name = "myisle"
+version = "0.2.0"
 edition = "2021"
+description = "MyIsle — 原创开源的 Windows 灵动岛桌面音乐伴侣"
+license = "MIT"
+repository = "https://github.com/lmf0828/MyIsle"
+authors = ["MyIsle contributors"]
 
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }

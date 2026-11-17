@@ -1429,19 +1429,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lingdao"
-version = "0.1.2"
-dependencies = [
- "eframe",
- "image",
- "raw-window-handle",
- "serde_json",
- "tray-icon",
- "ureq",
- "windows",
-]
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1552,6 +1539,19 @@ dependencies = [
  "png 0.17.16",
  "thiserror 1.0.69",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "myisle"
+version = "0.2.0"
+dependencies = [
+ "eframe",
+ "image",
+ "raw-window-handle",
+ "serde_json",
+ "tray-icon",
+ "ureq",
+ "windows",
 ]
 
 [[package]]
