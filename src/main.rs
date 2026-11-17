@@ -317,7 +317,7 @@ impl Default for Config {
             theme: Theme::Dark,
             lyric_shift_ms: 0.0,
             roll_anim: true,
-            roll_ms: 340.0,
+            roll_ms: 500.0,
             char_green: true,
             marquee: true,
             lyric_font: 13.0,
@@ -376,8 +376,6 @@ impl Config {
                     "theme" => cfg.theme = Theme::from_str(v),
                     "lyric_shift_ms" => cfg.lyric_shift_ms = v.parse().unwrap_or(cfg.lyric_shift_ms),
                     "roll_anim" => cfg.roll_anim = v == "1" || v == "true",
-                    "roll_ms" => cfg.roll_ms = v.parse().unwrap_or(cfg.roll_ms),
-                    "char_green" => cfg.char_green = v == "1" || v == "true",
                     "marquee" => cfg.marquee = v == "1" || v == "true",
                     "lyric_font" => cfg.lyric_font = v.parse().unwrap_or(cfg.lyric_font),
                     "spectrum" => cfg.spectrum = v == "1" || v == "true",
@@ -752,6 +750,8 @@ struct IslandApp {
     tt_base: Option<egui::TextureHandle>,
     tt_arm0: Option<egui::TextureHandle>,
     cover_tex: Option<egui::TextureHandle>,
+    /// 无真实封面时的兜底封面贴图（按歌名哈希缓存，逐像素抗锯齿的圆形渐变）
+    fallback_cover_tex: Option<(u64, egui::TextureHandle)>,
     upd_badge_tex: Option<egui::TextureHandle>,
     /// 兜底：SMTC 不可用时，从播放器窗口标题抓 “歌名 - 歌手”
     media_title_at: Instant,
@@ -913,6 +913,7 @@ impl IslandApp {
             tt_base: None,
             tt_arm0: None,
             cover_tex: None,
+            fallback_cover_tex: None,
         upd_badge_tex: None,
             media_title_at: Instant::now() - Duration::from_secs(10),
             media_title_cache: None,
@@ -2002,11 +2003,13 @@ impl IslandApp {
         // 唱片区 150x150 的方框里有透明留白（外环半径 < 半个方框）。要让「看得见的圆盘边缘」
         // 与内容区左/上边距完全相等，就把方框整体向 左/上 挪掉这圈留白。
         let disc_pad = tt_size * 0.5 - outer_r;
-        // 视觉圆盘略往下放，别顶着面板上沿
-        let disc_top_nudge = 10.0f32;
+        // 视觉圆盘与唱臂整体略往下放，别顶着面板上沿
+        let disc_top_nudge = 11.0f32;
+        // 圆盘（含唱臂、底座）整体向右移动 4 逻辑像素
+        let disc_dx = 4.0f32;
         let tt_rect = egui::Rect::from_min_size(
             egui::pos2(
-                cx0 - disc_pad,
+                cx0 - disc_pad + disc_dx,
                 rect.top() + CONTENT_PAD_T - disc_pad + disc_top_nudge,
             ),
             egui::vec2(tt_size, tt_size),
@@ -2018,7 +2021,7 @@ impl IslandApp {
         painter.circle_filled(dc, outer_r, egui::Color32::from_rgba_unmultiplied(54, 58, 66, a));
         
         // 2) 中间黑胶
-        painter.circle_filled(dc, vinyl_r, egui::Color32::from_rgba_unmultiplied(18, 19, 24, a));
+        painter.circle_filled(dc, vinyl_r, egui::Color32::from_rgba_unmultiplied(8, 9, 13, a));
         for k in 0..9 {
             let rr = cover_r + (vinyl_r - cover_r) * (k as f32 + 0.5) / 9.0;
             painter.circle_stroke(dc, rr, egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 9)));
@@ -2027,7 +2030,7 @@ impl IslandApp {
             // 3) 中心圆形封面（随盘旋转）
             let mut mesh = egui::Mesh::with_texture(ct.id());
             mesh.vertices.push(egui::epaint::Vertex { pos: dc, uv: egui::pos2(0.5, 0.5), color: egui::Color32::from_rgba_unmultiplied(255, 255, 255, a) });
-            let n = 64usize;
+            let n = 160usize;
             for i in 0..n {
                 let base = (i as f32) / (n as f32) * std::f32::consts::TAU;
                 let th = base + self.disc_angle;
@@ -2041,9 +2044,6 @@ impl IslandApp {
                 mesh.indices.extend_from_slice(&[0, a1, a2]);
             }
             painter.add(egui::Shape::mesh(mesh));
-            
-            painter.circle_filled(dc, 2.6, egui::Color32::from_rgba_unmultiplied(11, 14, 19, a));
-            painter.circle_filled(dc, 1.0, egui::Color32::from_rgba_unmultiplied(107, 119, 132, a));
         } else {
             // 无真实封面：中心用按歌名哈希的渐变圆 + 音符兜底
             let mut h: u64 = 1469598103934665603;
@@ -2052,25 +2052,52 @@ impl IslandApp {
                 h = h.wrapping_mul(1099511628211);
             }
             let hue = (h % 360) as f32;
-            let top = hsv(hue, 0.55, 0.62, a);
-            let bot = hsv((hue + 40.0) % 360.0, 0.62, 0.34, a);
-            let n = 40usize;
-            for i in 0..n {
-                let y0 = -cover_r + 2.0 * cover_r * (i as f32) / (n as f32);
-                let y1 = -cover_r + 2.0 * cover_r * ((i + 1) as f32) / (n as f32);
-                let half0 = (cover_r * cover_r - y0 * y0).max(0.0).sqrt();
-                let half1 = (cover_r * cover_r - y1 * y1).max(0.0).sqrt();
-                let hw = half0.max(half1);
-                let yy = dc.y + (y0 + y1) * 0.5;
-                let strip = egui::Rect::from_min_max(
-                    egui::pos2(dc.x - hw, yy - cover_r / n as f32),
-                    egui::pos2(dc.x + hw, yy + cover_r / n as f32),
+            // 逐像素抗锯齿的圆形渐变贴图（按歌名哈希缓存），彻底消除锯齿与边缘缺像素
+            let need_rebuild = match &self.fallback_cover_tex {
+                Some((hk, _)) => *hk != h,
+                None => true,
+            };
+            if need_rebuild {
+                let ppp = ui.ctx().pixels_per_point().max(1.0);
+                let s = (((cover_r * 2.0 * ppp).ceil() as usize) + 2).clamp(24, 512);
+                let top = hsv(hue, 0.55, 0.62, 255);
+                let bot = hsv((hue + 40.0) % 360.0, 0.62, 0.34, 255);
+                let (tr, tg, tb) = (top.r() as f32, top.g() as f32, top.b() as f32);
+                let (br, bg, bb) = (bot.r() as f32, bot.g() as f32, bot.b() as f32);
+                let mut rgba = vec![0u8; s * s * 4];
+                let c = (s as f32 - 1.0) * 0.5;
+                let rad = s as f32 * 0.5 - 1.0;
+                for y in 0..s {
+                    let t = y as f32 / (s as f32 - 1.0).max(1.0);
+                    let cr = (tr + (br - tr) * t).round() as u8;
+                    let cg = (tg + (bg - tg) * t).round() as u8;
+                    let cb = (tb + (bb - tb) * t).round() as u8;
+                    for x in 0..s {
+                        let dx = x as f32 - c;
+                        let dy = y as f32 - c;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        let cov = (rad + 0.5 - dist).clamp(0.0, 1.0);
+                        let idx = (y * s + x) * 4;
+                        rgba[idx] = cr;
+                        rgba[idx + 1] = cg;
+                        rgba[idx + 2] = cb;
+                        rgba[idx + 3] = (cov * 255.0).round() as u8;
+                    }
+                }
+                let ci = egui::ColorImage::from_rgba_unmultiplied([s, s], &rgba);
+                let tex = ui.ctx().load_texture("fallback_cover", ci, egui::TextureOptions::LINEAR);
+                self.fallback_cover_tex = Some((h, tex));
+            }
+            if let Some((_, tex)) = self.fallback_cover_tex.as_ref() {
+                let crect = egui::Rect::from_center_size(dc, egui::vec2(cover_r * 2.0, cover_r * 2.0));
+                painter.image(
+                    tex.id(),
+                    crect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, a),
                 );
-                painter.rect_filled(strip, 0.0, lerp_color(top, bot, (i as f32) / (n as f32)));
             }
             painter.text(dc, egui::Align2::CENTER_CENTER, "♪", egui::FontId::proportional(cover_r * 0.9), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 210));
-            
-            painter.circle_filled(dc, 2.6, egui::Color32::from_rgba_unmultiplied(11, 14, 19, a));
         }
         // 唱臂：底座静止 + 臂绕固定支点旋转（支点在贴图内 (146,20)，因整体 translate(-12,0)）
         if let Some(base) = self.tt_base.as_ref() {
@@ -2082,8 +2109,13 @@ impl IslandApp {
             draw_tex_rotated(painter, tex.id(), tt_rect, pivot, delta, a);
         }
 
-        // 右侧文字区
-        let tx = tt_rect.right() + 18.0;
+        // 右侧文字区：头部（歌名 / 进度条起点 / 控制按钮）在原先整体左移 10px 的基础上回退 3px（净左移 7px）；
+        // 尾部（进度条终点 / 时长 / 来源标签）保持不动（仍为原先的 -10px）。
+        // 以「圆盘未右移时」的右边缘为基准，避免下面圆盘右移把文字区一起带走。
+        let head_dx = -7.0f32;
+        let tail_dx = -10.0f32;
+        let tt_right_ref = tt_rect.right() - disc_dx;
+        let tx = tt_right_ref + 18.0 + head_dx;
         let title = if self.music.title.is_empty() { "未知曲目".to_string() } else { self.music.title.clone() };
         let artist = self.music.artist.clone();
         let avail = (cx1 - tx).max(40.0);
@@ -2127,7 +2159,7 @@ impl IslandApp {
         let pos = self.current_pos();
         let prog = if dur > 1.0 { (pos / dur).clamp(0.0, 1.0) as f32 } else { 0.0 };
         let bar_y = rect.top() + CONTENT_PAD_T + 69.0 - 10.0;
-        let bar = egui::Rect::from_min_max(egui::pos2(tx, bar_y), egui::pos2(cx1, bar_y + 3.0));
+        let bar = egui::Rect::from_min_max(egui::pos2(tx, bar_y), egui::pos2(cx1 + tail_dx, bar_y + 3.0));
         painter.rect_filled(bar, 1.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 30));
         painter.rect_filled(egui::Rect::from_min_max(bar.min, egui::pos2(tx + bar.width() * prog, bar_y + 3.0)), 1.5, green);
         // 进度条只做展示、不可拖动（拖动交给播放器本身；去掉白色圆点避免误以为可拖）
@@ -2136,12 +2168,12 @@ impl IslandApp {
             format!("{:02}:{:02}", s / 60, s % 60)
         };
         painter.text(egui::pos2(tx, bar_y + 6.0), egui::Align2::LEFT_TOP, fmt(pos), egui::FontId::proportional(10.0), faint);
-        painter.text(egui::pos2(cx1, bar_y + 6.0), egui::Align2::RIGHT_TOP, fmt(dur), egui::FontId::proportional(10.0), faint);
+        painter.text(egui::pos2(cx1 + tail_dx, bar_y + 6.0), egui::Align2::RIGHT_TOP, fmt(dur), egui::FontId::proportional(10.0), faint);
 
         // 控制按钮：上一首 / 播放(绿色大圆) / 下一首
         let btn_y = rect.top() + CONTENT_PAD_T + 108.0 - 10.0;
         let mut clicked: Option<&str> = None;
-        let prev_c = egui::pos2(tx + 14.0, btn_y);
+        let prev_c = egui::pos2(tx + 12.0, btn_y);
         let rprev = egui::Rect::from_center_size(prev_c, egui::vec2(22.0, 22.0));
         self.ctrl_hit.push(rprev);
         let resp_prev = ui.interact(rprev, ui.id().with("mctrl_prev"), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -2151,7 +2183,7 @@ impl IslandApp {
         if resp_prev.clicked() {
             clicked = Some("prev");
         }
-        let play_c = egui::pos2(tx + 52.0, btn_y);
+        let play_c = egui::pos2(tx + 58.0, btn_y);
         let rplay = egui::Rect::from_center_size(play_c, egui::vec2(36.0, 36.0));
         self.ctrl_hit.push(rplay);
         let resp_play = ui.interact(rplay, ui.id().with("mctrl_play"), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -2162,7 +2194,7 @@ impl IslandApp {
         if resp_play.clicked() {
             clicked = Some("play");
         }
-        let next_c = egui::pos2(tx + 92.0, btn_y);
+        let next_c = egui::pos2(tx + 104.0, btn_y);
         let rnext = egui::Rect::from_center_size(next_c, egui::vec2(22.0, 22.0));
         self.ctrl_hit.push(rnext);
         let resp_next = ui.interact(rnext, ui.id().with("mctrl_next"), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -2172,7 +2204,7 @@ impl IslandApp {
             clicked = Some("next");
         }
         if !self.music.app_id.is_empty() {
-            painter.text(egui::pos2(cx1, btn_y - 6.0), egui::Align2::RIGHT_CENTER, src_label(&self.music.app_id), egui::FontId::proportional(10.5), faint);
+            painter.text(egui::pos2(cx1 + tail_dx, btn_y - 6.0), egui::Align2::RIGHT_CENTER, src_label(&self.music.app_id), egui::FontId::proportional(10.5), faint);
         }
         if let Some(id) = clicked {
             {
@@ -2350,7 +2382,7 @@ impl IslandApp {
             let stt = platform::local_time();
             let mut ts = format!("{:02}:{:02}", stt.wHour, stt.wMinute);
             let fsz = if self.cfg.show_seconds { ts = format!("{}:{:02}", ts, stt.wSecond); 13.0 } else { 17.0 };
-            painter.text(egui::pos2(pill.left() + rail_w * 0.5, pill.top() + 15.0), egui::Align2::CENTER_CENTER, &ts, bold_font(fsz), egui::Color32::from_rgba_unmultiplied(233, 236, 242, a));
+            painter.text(egui::pos2(pill.left() + rail_w * 0.5, pill.top() + 17.5), egui::Align2::CENTER_CENTER, &ts, bold_font(fsz), egui::Color32::from_rgba_unmultiplied(233, 236, 242, a));
         }
 
         // 选中项滑动动画（菜单名之间切换）
@@ -2381,8 +2413,8 @@ impl IslandApp {
             let w = (1.0 - (idx as f32 - eff_shown).abs()).clamp(0.0, 1.0);
             let icol = lerp_color(muted, accent, w);
             let cx = item.center().x;
-            draw_nav_icon(painter, *icon_kind, egui::pos2(cx, iy + 14.5), 18.0, icol);
-            painter.text(egui::pos2(cx, iy + 33.0), egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(10.5), icol);
+            draw_nav_icon(painter, *icon_kind, egui::pos2(cx, iy + 13.0), 18.0, icol);
+            painter.text(egui::pos2(cx, iy + 31.5), egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(10.5), icol);
             let resp = ui.interact(item, ui.id().with(("rail", idx)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
             if resp.clicked() {
                 self.show_settings = false;
@@ -2407,8 +2439,8 @@ impl IslandApp {
             }
             let icol = if self.show_settings { accent } else { muted };
             let cx = item.center().x;
-            painter.text(egui::pos2(cx, set_y + 14.5), egui::Align2::CENTER_CENTER, "\u{E713}", icon_font(17.0), icol);
-            painter.text(egui::pos2(cx, set_y + 33.0), egui::Align2::CENTER_CENTER, "设置", egui::FontId::proportional(10.5), icol);
+            painter.text(egui::pos2(cx, set_y + 13.0), egui::Align2::CENTER_CENTER, "\u{E713}", icon_font(17.0), icol);
+            painter.text(egui::pos2(cx, set_y + 31.5), egui::Align2::CENTER_CENTER, "设置", egui::FontId::proportional(10.5), icol);
             let resp = ui.interact(item, ui.id().with("rail_settings"), egui::Sense::click())
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if resp.clicked() && !self.show_settings {
@@ -2637,12 +2669,13 @@ impl IslandApp {
         let left = content.left() + CONTENT_PAD_X;
         let right = content.right() - CONTENT_PAD_X;
         let row_h = 30.0f32;
-        let label_h = 22.0f32;
+        let label_h = 18.0f32;
+        let group_gap = 12.0f32;
         // 设置内容区可滚动（设置项变多时自动出现滚动）
         let list_top = content.top() + header_h;
         let list_bottom = content.bottom() - CONTENT_PAD_B;
         let view_h = (list_bottom - list_top).max(1.0);
-        let total_h = label_h * 2.0 + row_h * 4.0;
+        let total_h = label_h * 2.0 + group_gap + row_h * 3.0;
         let max_scroll = (total_h - view_h).max(0.0);
         if let Some(ph) = ui.ctx().pointer_hover_pos() {
             if full.contains(ph) && max_scroll > 0.0 {
@@ -2664,26 +2697,18 @@ impl IslandApp {
             painter.text(egui::pos2(left, y + row_h * 0.5), egui::Align2::LEFT_CENTER, s, egui::FontId::proportional(13.5), c);
         };
         let tg = |y: f32| egui::Rect::from_min_size(egui::pos2(right - 32.0, y + row_h * 0.5 - 8.0), egui::vec2(32.0, 16.0));
-        let sl = |y: f32| egui::Rect::from_min_max(egui::pos2(right - 140.0, y + 3.0), egui::pos2(right, y + row_h - 3.0));
 
         // 分组：歌词
-        painter.text(egui::pos2(left, y), egui::Align2::LEFT_TOP, "歌词", egui::FontId::proportional(11.5), muted2);
+        painter.text(egui::pos2(left, y), egui::Align2::LEFT_TOP, "歌词", egui::FontId::proportional(13.0), muted2);
         y += label_h;
         // 换行滚动动画
         row_label(painter, y, "换行滚动动画", ink);
         { let trect = tg(y); if let Some(v) = Self::draw_toggle(ui, painter, trect, self.cfg.roll_anim, ui.id().with("tg_roll"), accent, a) { self.cfg.roll_anim = v; changed = true; } }
         y += row_h;
-        // 滚动时长
-        row_label(painter, y, "滚动时长", if self.cfg.roll_anim { ink } else { muted2 });
-        { let zone = sl(y); if let Some(v) = Self::draw_slider(ui, painter, zone, self.cfg.roll_ms, 200.0, 800.0, 10.0, " ms", self.cfg.roll_anim, ui.id().with("sl_rollms"), accent, a) { self.cfg.roll_ms = v; changed = true; } }
-        y += row_h;
-        // 逐字渐绿
-        row_label(painter, y, "逐字渐绿", ink);
-        { let trect = tg(y); if let Some(v) = Self::draw_toggle(ui, painter, trect, self.cfg.char_green, ui.id().with("tg_green"), accent, a) { self.cfg.char_green = v; changed = true; } }
-        y += row_h;
 
         // 分组：通用（软件更新，所有模块共用）
-        painter.text(egui::pos2(left, y), egui::Align2::LEFT_TOP, "通用", egui::FontId::proportional(11.5), muted2);
+        y += group_gap;
+        painter.text(egui::pos2(left, y), egui::Align2::LEFT_TOP, "通用", egui::FontId::proportional(13.0), muted2);
         y += label_h;
         row_label(painter, y, "软件更新", ink);
         {
