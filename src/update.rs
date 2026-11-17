@@ -248,4 +248,64 @@ mod tests {
     fn parse_missing_version() {
         assert!(parse_manifest(r#"{"notes":"x"}"#).is_err());
     }
+
+    #[test]
+    #[ignore]
+    fn probe_manifest_env() {
+        let url = manifest_url().expect("no manifest url");
+        println!("URL={url}");
+        match read_text(&url) {
+            Ok(t) => match parse_manifest(&t) {
+                Ok(m) => println!("OK version={} size={} url={}", m.version, m.size, m.url),
+                Err(e) => println!("PARSE_ERR {e}"),
+            },
+            Err(e) => println!("FETCH_ERR {e}"),
+        }
+    }
+
+    /// 端到端：真实检查→下载→校验→静默安装到临时目录→验证产物。
+    #[test]
+    #[ignore]
+    fn probe_update_install_env() {
+        let m = match check() {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                println!("NO_UPDATE (current {VERSION})");
+                return;
+            }
+            Err(e) => {
+                println!("CHECK_ERR {e}");
+                return;
+            }
+        };
+        println!("FOUND version={} size={}", m.version, m.size);
+        let setup = match download_setup(&m) {
+            Ok(p) => p,
+            Err(e) => {
+                println!("DOWNLOAD_ERR {e}");
+                return;
+            }
+        };
+        println!("DOWNLOADED {}", setup.display());
+        let dir = std::env::temp_dir().join("lingdao_upd_install_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = std::process::Command::new(&setup)
+            .arg("/VERYSILENT")
+            .arg("/SUPPRESSMSGBOXES")
+            .arg("/NORESTART")
+            .arg("/SP-")
+            .arg(format!("/DIR={}", dir.display()))
+            .status();
+        println!("SETUP_STATUS {:?}", st);
+        let exe = dir.join("LingDao.exe");
+        if exe.is_file() {
+            println!("INSTALLED size={}", exe.metadata().map(|x| x.len()).unwrap_or(0));
+            let _ = std::process::Command::new(dir.join("unins000.exe"))
+                .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+                .status();
+            println!("UNINSTALLED exists={}", exe.exists());
+        } else {
+            println!("INSTALL_MISSING");
+        }
+    }
 }
