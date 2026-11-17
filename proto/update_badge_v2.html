@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MyIsle · 更新提示小标 原型 v2</title>
+<style>
+  :root{
+    --bg:#0b0c10; --panel:#16171c; --card:#22242b; --line:#2d3038;
+    --text:#eef1f6; --muted:#9aa1ad; --muted2:#6c737f;
+    --mint:#34d399; --mint2:#4ade80;
+    --radius:18px; --shadow:0 24px 60px rgba(0,0,0,.55);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 500px at 50% -10%, #1a2030 0%, transparent 60%),var(--bg);
+    color:var(--text);font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 28px 80px}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.5px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:26px}
+  .sub b{color:var(--mint2)}
+  .cap{font-size:12px;color:var(--muted);margin:0 0 10px 4px;letter-spacing:.3px}
+  .cap b{color:var(--text)}
+  .row{display:flex;gap:30px;flex-wrap:wrap;align-items:flex-start}
+  .artboard{margin-bottom:36px}
+  .note{font-size:12px;color:var(--muted2);margin-top:10px;max-width:760px;line-height:1.7}
+  .note b{color:var(--muted)}
+
+  /* 收起态胶囊 */
+  .pillbar{width:460px;height:62px;border-radius:18px;background:linear-gradient(180deg,#1d1f26,#16181d);
+    border:1px solid rgba(255,255,255,.07);box-shadow:var(--shadow);display:flex;align-items:center;padding:0 18px;gap:14px;position:relative}
+  .spectrum{display:flex;align-items:flex-end;gap:3px;height:18px;flex:none}
+  .spectrum i{width:3px;border-radius:2px;background:linear-gradient(180deg,#6ee7b7,#34d399);display:block}
+  .spectrum i:nth-child(1){height:9px}.spectrum i:nth-child(2){height:15px}.spectrum i:nth-child(3){height:11px}
+  .ptext{flex:1;min-width:0;font-size:14px;color:#e8ebf1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ptext small{color:#9aa1ad;font-size:12px}
+  .ptime{font-size:14px;font-weight:700;color:#eef1f6;letter-spacing:.5px;flex:none}
+  .newdot{width:6px;height:6px;border-radius:50%;background:var(--mint2);flex:none;box-shadow:0 0 0 3px rgba(74,222,128,.10)}
+  .timewrap{display:flex;align-items:center;gap:7px;flex:none}
+
+  /* 展开面板 */
+  .panel{width:760px;height:430px;background:linear-gradient(180deg,#191b21,#141519);
+    border:1px solid rgba(255,255,255,.06);border-radius:26px;box-shadow:var(--shadow);display:flex;overflow:hidden;position:relative}
+  .rail{width:92px;background:rgba(10,11,14,.55);padding:14px 10px;display:flex;flex-direction:column;gap:6px;border-right:1px solid rgba(255,255,255,.04)}
+  .ritem{border:0;background:transparent;color:#aeb4bf;border-radius:14px;padding:10px 6px;display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;font-family:inherit;position:relative}
+  .ritem .g{font-size:18px}
+  .ritem.active{background:rgba(52,211,153,.16);color:var(--mint2)}
+  .ritem .badge{position:absolute;right:5px;top:5px;width:9px;height:9px;border-radius:50%;background:var(--mint2);box-shadow:0 0 0 2px #16171c}
+  .ritem.settings{margin-top:auto}
+  .content{flex:1;padding:16px 18px 14px;position:relative;display:flex;flex-direction:column}
+  .crumb{font-size:12px;color:var(--muted2);margin-bottom:12px}
+  .crumb b{color:var(--text);font-weight:600}
+  .group{font-size:11px;color:var(--muted2);letter-spacing:.08em;margin:14px 0 8px}
+  .srow{height:38px;display:flex;align-items:center;border-radius:10px;padding:0 4px}
+  .srow .k{font-size:13px;color:var(--text)}
+  .srow .v{margin-left:auto;font-size:12px;color:var(--mint2);display:flex;align-items:center;gap:7px;font-weight:600}
+  .srow .v .mini{width:6px;height:6px;border-radius:50%;background:var(--mint2)}
+  .srow.hot{background:linear-gradient(90deg,rgba(52,211,153,.10),rgba(52,211,153,.02));outline:1px solid rgba(52,211,153,.20)}
+  .tagnew{font-size:9.5px;font-weight:700;color:#06251b;background:var(--mint2);padding:2px 6px;border-radius:99px;letter-spacing:.3px}
+  .divider{height:1px;background:rgba(255,255,255,.06);margin:10px 0}
+
+  /* 放大示意 */
+  .zoom{width:220px;height:150px;border-radius:16px;border:1px solid var(--line);background:#121318;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+  .zoombar{display:flex;align-items:center;gap:10px}
+  .zoombar .t{font-size:32px;font-weight:800;letter-spacing:1px}
+  .zoomdot{width:11px;height:11px;border-radius:50%;background:var(--mint2);box-shadow:0 0 0 4px rgba(74,222,128,.12)}
+  .label{font-size:11px;color:var(--muted2)}
+</style>
+</head>
+<body>
+  <h1>MyIsle · 有新版本时的小标记（原型 v2）</h1>
+  <div class="sub">核心思路：<b>只在"时间"旁边点一个小绿点</b>，不挡内容；展开后<b>设置菜单挂一个小标</b>，点进去"软件更新"直接看到新版本。</div>
+
+  <div class="row">
+    <!-- 1 收起态 -->
+    <div class="artboard">
+      <div class="cap"><b>① 收起态</b> · 时间右侧一个 6px 绿点（有更新才出现）</div>
+      <div class="pillbar">
+        <div class="spectrum"><i></i><i></i><i></i></div>
+        <div class="ptext">慢倍速(氛围版) <small>· 陆知远</small></div>
+        <div class="timewrap"><span class="ptime">16:57</span><span class="newdot"></span></div>
+      </div>
+      <div class="note">只占 6px，不挤压时间；<b>没有新版本时不显示</b>，所以平时完全无感。</div>
+    </div>
+
+    <!-- 2 放大 -->
+    <div class="artboard">
+      <div class="cap"><b>①-放大</b> · 绿点跟时间基线居中对齐</div>
+      <div class="zoom">
+        <div class="zoombar"><span class="t">16:57</span><span class="zoomdot"></span></div>
+        <div class="label">绿点直径 6px · 距时间 7px</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <!-- 3 展开设置菜单小标 -->
+    <div class="artboard">
+      <div class="cap"><b>② 展开态</b> · 左侧底部「设置」右上角一个小绿点</div>
+      <div class="panel">
+        <div class="rail">
+          <div class="ritem active"><span class="g">♫</span>音乐</div>
+          <div class="ritem"><span class="g">☁</span>天气</div>
+          <div class="ritem settings"><span class="g">⚙</span>设置<span class="badge"></span></div>
+        </div>
+        <div class="content">
+          <div class="crumb">音乐 / <b>正在播放</b></div>
+          <div style="font-size:26px;font-weight:800;margin-top:8px">慢倍速(氛围版)</div>
+          <div style="color:#9aa1ad;font-size:12px;margin-top:4px">陆知远 · 汽水音乐</div>
+          <div style="height:6px;border-radius:4px;background:#2a2d35;margin-top:22px;position:relative">
+            <div style="height:100%;width:58%;border-radius:4px;background:linear-gradient(90deg,#22c58b,#4ade80)"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10.5px;color:#6c737f;margin-top:6px"><span>2:10</span><span>3:43</span></div>
+        </div>
+      </div>
+      <div class="note">小标放在<b>设置图标右上角</b>，不改变菜单尺寸；点设置后进入设置页。</div>
+    </div>
+
+    <!-- 4 设置页更新行 -->
+    <div class="artboard">
+      <div class="cap"><b>③ 设置页</b> · 「软件更新」行直接提示有新版本</div>
+      <div class="panel">
+        <div class="rail">
+          <div class="ritem"><span class="g">♫</span>音乐</div>
+          <div class="ritem"><span class="g">☁</span>天气</div>
+          <div class="ritem settings active"><span class="g">⚙</span>设置<span class="badge"></span></div>
+        </div>
+        <div class="content">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:15px;color:#aeb4bf">‹</span>
+            <span style="font-size:13px;color:#9aa1ad">设置</span>
+          </div>
+          <div class="group">歌词</div>
+          <div class="srow"><span class="k">换行滚动动画</span><span class="v" style="color:#9aa1ad">开</span></div>
+          <div class="srow"><span class="k">滚动时长</span><span class="v" style="color:#9aa1ad">0.9s</span></div>
+          <div class="srow"><span class="k">逐字渐绿</span><span class="v" style="color:#9aa1ad">开</span></div>
+          <div class="group">通用</div>
+          <div class="srow hot"><span class="k">软件更新</span>
+            <span class="v"><span class="tagnew">有新版本</span> v0.2.1 ›</span>
+          </div>
+          <div class="divider"></div>
+          <div style="font-size:11.5px;color:#6c737f;line-height:1.7">点「有新版本 v0.2.1」即可下载安装，完成后自动重启。</div>
+        </div>
+      </div>
+      <div class="note">设置菜单的小绿点和这里的<b>「有新版本」</b>是同一件事，点进来不会“找不到”。</div>
+    </div>
+  </div>
+</body>
+</html>

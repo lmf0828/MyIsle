@@ -1470,6 +1470,7 @@ impl IslandApp {
             let a = ((0.5 - e) * 2.0 * 255.0) as u8;
             let amt = self.music_amt.clamp(0.0, 1.0);
             let am = (a as f32 * amt) as u8; // 音乐内容的淡入淡出
+            let mut time_rect: Option<egui::Rect> = None;
             if has {
                 let fg = egui::Color32::from_rgba_unmultiplied(238, 240, 246, am);
                 let green = egui::Color32::from_rgba_unmultiplied(64, 214, 160, am);
@@ -1569,13 +1570,13 @@ impl IslandApp {
                     self.draw_marquee(&painter, text_rect, &text, egui::FontId::proportional(14.0), fg, t);
                 }
                 // 右侧时间
-                painter.text(
+                time_rect = Some(painter.text(
                     egui::pos2(pill.right() - 13.0, cy),
                     egui::Align2::RIGHT_CENTER,
                     &time_s,
                     time_font,
                     fg,
-                );
+                ));
             } else {
                 let mut s = format!("{:02}:{:02}", st.wHour, st.wMinute);
                 if self.cfg.show_seconds {
@@ -1585,21 +1586,21 @@ impl IslandApp {
                 let col = egui::Color32::from_rgba_unmultiplied(238, 240, 246, centered_a);
                 let font = bold_font(self.cfg.font);
                 // 无音乐时只居中显示时间
-                painter.text(
+                time_rect = Some(painter.text(
                     egui::pos2(pill.center().x, pill.center().y - self.cfg.font * 0.06),
                     egui::Align2::CENTER_CENTER,
                     &s,
                     font,
                     col,
-                );
+                ));
             }
-            // 有新版本时，收起态右端显示一个小绿点（不打扰，但能看见）
+            // 有新版本时，紧跟时间右侧显示一个小绿点（不打扰，但一眼能看到）
             if self.upd_ver.is_some() {
-                painter.circle_filled(
-                    egui::pos2(pill.right() - 6.0, pill.center().y),
-                    2.6,
-                    egui::Color32::from_rgba_unmultiplied(52, 211, 153, 210),
-                );
+                let bp = time_rect
+                    .map(|r| egui::pos2(r.right() + 7.0, r.center().y))
+                    .unwrap_or_else(|| egui::pos2(pill.center().x + 46.0, pill.center().y));
+                painter.circle_filled(bp, 3.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 230));
+                painter.circle_stroke(bp, 3.6, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 60)));
             }
         } else {
             self.draw_expanded_panel(ui, &painter, pill, e, t);
@@ -2249,6 +2250,19 @@ impl IslandApp {
             if resp.clicked() && !self.show_settings {
                 self.settings_scroll = 0.0;
                 self.show_settings = true;
+                if self.upd_ver.is_none() && !self.upd_checking {
+                    self.start_update_check();
+                }
+            }
+            // 有新版本：设置菜单右上角一个小绿点，提示里面有更新
+            if self.upd_ver.is_some() {
+                let bc = egui::pos2(item.right() - 3.0, item.top() + 5.0);
+                painter.circle_filled(
+                    bc,
+                    5.0,
+                    egui::Color32::from_rgba_unmultiplied(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2], 235),
+                );
+                painter.circle_filled(bc, 3.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 240));
             }
         }
 
@@ -2537,7 +2551,7 @@ impl IslandApp {
             let (txt, col) = if self.upd_busy {
                 (self.upd_msg.clone(), accent)
             } else if let Some(m) = &self.upd_ver {
-                (format!("v{} 可更新 ›", m.version), accent)
+                (format!("发现新版本 v{} ›", m.version), accent)
             } else if self.upd_checking {
                 ("检查中…".to_string(), muted2)
             } else if self.upd_msg.contains("失败") {
