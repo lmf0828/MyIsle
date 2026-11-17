@@ -9,6 +9,15 @@ Set-Location $root
 $genv = Join-Path $PSScriptRoot 'genv.ps1'
 if (Test-Path $genv) { . $genv }
 
+if (-not $Repo) { $Repo = $env:MYISLE_REPO }
+if (-not $Repo) {
+    try {
+        $u = (git remote get-url origin 2>$null)
+        if ($u -match 'github\.com[:/](?<r>[^/]+/[^/.]+)') { $Repo = $Matches['r'] }
+    } catch {}
+}
+if (-not $Repo) { $Repo = 'lmf0828/MyIsle' }
+
 if ($Version) { & "$PSScriptRoot\set_version.ps1" -Version $Version }
 $v = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
 Write-Host "packing v$v"
