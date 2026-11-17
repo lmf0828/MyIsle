@@ -243,7 +243,7 @@ fn strip_integrity(v: &mut Value) {
 }
 
 /// 当 app.asar 位于 Program Files 等无写权限目录时，借一次 UAC 提权完成替换。
-fn elevated_copy(src: &Path, dst: &Path) -> Result<(), String> {
+fn elevated_copy_expect(src: &Path, dst: &Path, expect_patched: bool) -> Result<(), String> {
     let dir = crate::paths::data_dir();
     let ps1 = dir.join("myisle_elevate_copy.ps1");
     let script = format!(
@@ -264,13 +264,84 @@ fn elevated_copy(src: &Path, dst: &Path) -> Result<(), String> {
         return Err("UAC 提权被取消或失败".into());
     }
     match inspect(dst) {
-        Ok((true, _)) => Ok(()),
+        Ok((p, _)) if p == expect_patched => Ok(()),
         _ => Err("提权后校验失败".into()),
     }
 }
+
+fn elevated_copy(src: &Path, dst: &Path) -> Result<(), String> {
+    elevated_copy_expect(src, dst, true)
+}
+
+/// 用户是否主动「还原了汽水官方原版」——此时自动补丁必须停手，否则 15 秒后又会被打回去。
+fn disabled_flag() -> PathBuf {
+    crate::paths::file("soda_patch_disabled")
+}
+pub fn patch_disabled() -> bool {
+    disabled_flag().is_file()
+}
+pub fn backup_available() -> bool {
+    crate::paths::file("app.asar.bak").is_file()
+}
+
+/// 把汽水 app.asar 还原成官方原版，并写入「不要自动打补丁」开关。
+pub fn spawn_restore() -> Result<(), String> {
+    if !backup_available() {
+        return Err("没有官方原版备份（data\\app.asar.bak）".into());
+    }
+    let _ = std::fs::write(disabled_flag(), b"1");
+    std::thread::spawn(|| {
+        dlog("manual restore: start");
+        if soda_running() {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/IM", "SodaMusic.exe", "/F"])
+                .status();
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        let Some(asar) = find_asar() else {
+            dlog("manual restore: app.asar not found");
+            return;
+        };
+        let bak = crate::paths::file("app.asar.bak");
+        let data = match std::fs::read(&bak) {
+            Ok(d) => d,
+            Err(e) => {
+                dlog(&format!("manual restore: read backup failed: {e}"));
+                return;
+            }
+        };
+        let tmp = asar.with_extension("asar.restore.tmp");
+        let wrote = (|| -> Result<(), String> {
+            std::fs::write(&tmp, &data).map_err(|e| e.to_string())?;
+            std::fs::rename(&tmp, &asar).map_err(|e| e.to_string())
+        })();
+        if let Err(e) = wrote {
+            let _ = std::fs::remove_file(&tmp);
+            if let Err(ue) = elevated_copy_expect(&bak, &asar, false) {
+                dlog(&format!("manual restore: failed ({e}); elevate failed: {ue}"));
+                return;
+            }
+        }
+        dlog("manual restore: original restored");
+        if !soda_running() {
+            let _ = launch_soda();
+        }
+    });
+    Ok(())
+}
+
+/// 重新启用自动补丁（撤销「还原官方原版」），并立即修复一次。
+pub fn spawn_enable_patch() -> Result<(), String> {
+    let _ = std::fs::remove_file(disabled_flag());
+    spawn_repair()
+}
+
 /// 需要时自动打补丁。返回 Ok(true)=本次新打了补丁；Ok(false)=本来就有补丁；
 /// Err=失败（例如文件被占用）。
 pub fn ensure_patched() -> Result<bool, String> {
+    if patch_disabled() {
+        return Err("用户已选择还原汽水官方原版".into());
+    }
     let Some(asar) = find_asar() else { return Err("找不到汽水 app.asar".into()) };
     let (patched, entry) = inspect(&asar)?;
     if patched {
@@ -414,6 +485,10 @@ pub fn spawn_repair() -> Result<(), String> {
 /// 启动时调用一次：确保补丁可用。汽水在运行但补丁缺失时，自动重启一次把它补好；
 /// 若补丁已在、只是 CDP 还没热起来，则不动它（留给 tick 处理）。
 pub fn boot_check() {
+    if patch_disabled() {
+        dlog("boot: patch disabled by user (restored official asar)");
+        return;
+    }
     if !soda_running() {
         match ensure_patched() {
             Ok(true) => dlog("boot: soda patch applied (not running)"),
@@ -444,6 +519,9 @@ pub fn boot_check() {
 /// - 已打补丁但 CDP 不通（通常是刚打补丁还没重启）→ 未在播放时重启让它生效；
 /// 播放中则等暂停后再重启，避免正听着被打断。
 pub fn tick(playing: bool) {
+    if patch_disabled() {
+        return;
+    }
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
     static LAST_RESTART: Mutex<Option<Instant>> = Mutex::new(None);
     let now = Instant::now();
@@ -560,6 +638,31 @@ mod tests {
             Ok(s) => println!("PATCHREPORT {s}"),
             Err(e) => println!("PATCHERR {e}"),
         }
+    }
+
+    /// 端到端演练「还原官方原版 → 重新启用补丁」（会真的重启汽水，慎用）。
+    #[test]
+    #[ignore]
+    fn probe_restore_roundtrip() {
+        let src_bak = std::path::PathBuf::from(r"D:\LingDao\data\app.asar.bak");
+        let dst_bak = crate::paths::file("app.asar.bak");
+        if src_bak.is_file() && src_bak != dst_bak {
+            let _ = std::fs::create_dir_all(dst_bak.parent().unwrap());
+            let _ = std::fs::copy(&src_bak, &dst_bak);
+        }
+        let status = || {
+            (
+                patch_disabled(),
+                find_asar().map(|a| inspect(&a).map(|x| x.0).unwrap_or(false)),
+            )
+        };
+        println!("BEFORE backup={} disabled={} patched={:?}", backup_available(), status().0, status().1);
+        spawn_restore().expect("restore");
+        std::thread::sleep(Duration::from_secs(12));
+        println!("AFTER_RESTORE disabled={} patched={:?}", status().0, status().1);
+        spawn_enable_patch().expect("enable");
+        std::thread::sleep(Duration::from_secs(18));
+        println!("AFTER_ENABLE disabled={} patched={:?}", status().0, status().1);
     }
 
     /// 从当前（已打补丁）asar 里剥掉注入，导出纯净原版到 data\app.asar.orig 并刷新备份。

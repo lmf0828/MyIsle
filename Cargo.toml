@@ -1,6 +1,6 @@
 [package]
 name = "myisle"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "MyIsle — 原创开源的 Windows 灵动岛桌面音乐伴侣"
 license = "MIT"
