@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyIsle — Windows 桌面灵动岛</title>
+<meta name="description" content="MyIsle：停靠在 Windows 屏幕顶部的灵动岛。音乐、歌词、天气、日程，一触即达。开源、免费、轻量。">
+<link rel="icon" type="image/svg+xml" href="img/logo.svg">
+<style>
+  :root{
+    --bg:#0d0e12; --bg2:#12131a; --card:#181920; --card2:#1e1f28;
+    --line:#2a2c36; --ink:#e9ebf1; --muted:#9aa0ad; --accent:#34d399; --accent2:#10b981;
+    --radius:16px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--ink);font-family:"Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+
+  /* nav */
+  nav{position:sticky;top:0;z-index:50;background:rgba(13,14,18,.82);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex;align-items:center;gap:28px;height:60px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:.3px}
+  .brand svg{display:block}
+  nav .links{display:flex;gap:22px;margin-left:auto;font-size:14px;color:var(--muted)}
+  nav .links a:hover{color:var(--ink)}
+  .nav-gh{margin-left:8px;border:1px solid var(--line);border-radius:10px;padding:7px 14px;font-size:13.5px;color:var(--ink);display:inline-flex;align-items:center;gap:7px;transition:border-color .2s}
+  .nav-gh:hover{border-color:var(--accent)}
+
+  /* hero */
+  .hero{padding:88px 0 72px;background:radial-gradient(900px 420px at 78% 8%,rgba(52,211,153,.10),transparent 60%),radial-gradient(700px 380px at 12% 90%,rgba(59,130,246,.07),transparent 60%)}
+  .hero .wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
+  .pill-badge{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:6px 14px;font-size:12.5px;color:var(--muted)}
+  .pill-badge .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+  h1{font-size:44px;line-height:1.22;font-weight:800;margin:20px 0 16px;letter-spacing:.5px}
+  h1 .hl{color:var(--accent)}
+  .sub{color:var(--muted);font-size:16.5px;max-width:30em;margin-bottom:30px}
+  .cta{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .btn{display:inline-flex;align-items:center;gap:9px;border-radius:12px;padding:12px 22px;font-size:15px;font-weight:600;transition:transform .15s,box-shadow .2s,background .2s;cursor:pointer}
+  .btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#071410;box-shadow:0 8px 24px rgba(52,211,153,.25)}
+  .btn-primary:hover{transform:translateY(-1px);box-shadow:0 12px 30px rgba(52,211,153,.32)}
+  .btn-ghost{border:1px solid var(--line);color:var(--ink);background:var(--card)}
+  .btn-ghost:hover{border-color:var(--accent)}
+  .dl-meta{margin-top:16px;font-size:12.5px;color:var(--muted)}
+  .dl-meta b{color:var(--ink);font-weight:600}
+
+  .hero-shot{position:relative}
+  .hero-shot .frame{background:linear-gradient(180deg,#1b1c24,#141519);border:1px solid var(--line);border-radius:22px;padding:10px;box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px rgba(52,211,153,.06)}
+  .hero-shot img{display:block;width:100%;border-radius:14px}
+  .hero-shot .glow{position:absolute;inset:-40px;background:radial-gradient(closest-side,rgba(52,211,153,.14),transparent);z-index:-1}
+
+  /* sections */
+  section{padding:72px 0}
+  .sec-head{margin-bottom:40px}
+  .kicker{font-size:12.5px;letter-spacing:2.5px;color:var(--accent);text-transform:uppercase;font-weight:700}
+  h2{font-size:30px;font-weight:800;margin-top:10px;letter-spacing:.4px}
+  .sec-head p{color:var(--muted);margin-top:10px;max-width:36em}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:26px 24px;transition:transform .2s,border-color .2s}
+  .card:hover{transform:translateY(-3px);border-color:#3a3d4a}
+  .card .ic{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:rgba(52,211,153,.12);margin-bottom:16px}
+  .card .ic svg{stroke:var(--accent)}
+  .card h3{font-size:16.5px;margin-bottom:8px;font-weight:700}
+  .card p{font-size:13.8px;color:var(--muted)}
+
+  .shots{display:grid;grid-template-columns:1fr 1.6fr;gap:18px;align-items:start}
+  .shot{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  .shot img{display:block;width:100%}
+  .shot figcaption{padding:14px 18px;font-size:13px;color:var(--muted);border-top:1px solid var(--line)}
+
+  /* download */
+  .dl-box{background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:20px;padding:36px;display:flex;gap:32px;align-items:center;flex-wrap:wrap}
+  .dl-box .info{flex:1;min-width:240px}
+  .dl-box h3{font-size:21px;margin-bottom:8px}
+  .dl-box .ver{color:var(--accent);font-weight:700}
+  .dl-box .req{font-size:13px;color:var(--muted);margin-top:12px}
+  .dl-box .actions{display:flex;flex-direction:column;gap:10px;min-width:260px}
+  .dl-note{margin-top:14px;font-size:12.5px;color:var(--muted)}
+  .dl-note a{color:var(--accent)}
+
+  footer{border-top:1px solid var(--line);padding:28px 0;font-size:13px;color:var(--muted)}
+  footer .wrap{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+  footer a{color:var(--ink)}
+  footer a:hover{color:var(--accent)}
+
+  @media (max-width:900px){
+    .hero .wrap{grid-template-columns:1fr}
+    .grid{grid-template-columns:1fr}
+    .shots{grid-template-columns:1fr}
+    nav .links{display:none}
+    h1{font-size:34px}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <svg width="26" height="26" viewBox="0 0 26 26"><rect x="1" y="7" width="24" height="12" rx="6" fill="#181920" stroke="#34d399" stroke-width="1.6"/><circle cx="18" cy="13" r="3.2" fill="#34d399"/></svg>
+      MyIsle
+    </a>
+    <div class="links">
+      <a href="#features">功能</a>
+      <a href="#shots">界面</a>
+      <a href="#download">下载</a>
+    </div>
+    <a class="nav-gh" href="https://github.com/lmf0828/MyIsle" target="_blank" rel="noopener">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div>
+      <span class="pill-badge"><span class="dot"></span>开源 · 免费 · 原生 Rust</span>
+      <h1>把「灵动岛」<br>带到 <span class="hl">Windows</span> 桌面</h1>
+      <p class="sub">MyIsle 停靠在屏幕顶部，展开即是一个完整的控制中心：黑胶唱片、逐字渐绿的歌词、天气与日程，一切触手可及。</p>
+      <div class="cta">
+        <a class="btn btn-primary" id="btn-dl-top" href="https://github.com/lmf0828/MyIsle/releases/latest" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          下载安装包 <span id="ver-top">…</span>
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/lmf0828/MyIsle" target="_blank" rel="noopener">查看源码</a>
+      </div>
+      <div class="dl-meta">Windows 10 / 11 · x64 · 免安装绿色版与安装包均提供 · <b id="size-top">—</b></div>
+    </div>
+    <div class="hero-shot">
+      <div class="glow"></div>
+      <div class="frame"><img src="img/music.png" alt="MyIsle 音乐展开界面"></div>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Features</div>
+      <h2>目前已有的功能模块</h2>
+      <p>小而完整：每个模块都为「顶部常驻、即点即用」而设计，不占任务栏、不打扰工作。</p>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><line x1="18.5" y1="4.5" x2="14.5" y2="9.5"/></svg></div>
+        <h3>黑胶音乐岛</h3>
+        <p>旋转黑胶唱片与唱臂、专辑封面、进度条与上一首 / 播放 / 下一首，折叠时仅占一条小岛。</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
+        <h3>逐字渐绿歌词</h3>
+        <p>卡拉OK式逐字渲染，当前演唱字实时点亮；支持换行滚动动画，歌词时间轴可手动微调。</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0-.9-8.9 6 6 0 1 0-11.4 2.2A3.5 3.5 0 0 0 6.5 19z"/></svg></div>
+        <h3>天气速览</h3>
+        <p>折叠态常显当前天气，展开后查看多日详情，天气变化一目了然。</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2.5"/><line x1="3" y1="9.5" x2="21" y2="9.5"/><line x1="8" y1="2.5" x2="8" y2="5.5"/><line x1="16" y1="2.5" x2="16" y2="5.5"/></svg></div>
+        <h3>日程页</h3>
+        <p>展开面板内直接查看日程安排，无需切换窗口。</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.01a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.01a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z"/></svg></div>
+        <h3>设置中心</h3>
+        <p>主题、透明度、圆角、字号、开机自启、时间格式等，全部在岛内完成配置。</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></div>
+        <h3>自动更新</h3>
+        <p>每日自动检查新版本，后台下载并显示进度，一键安装后自动重启到新版。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="shots" style="background:var(--bg2);border-top:1px solid var(--line);border-bottom:1px solid var(--line)">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Screenshots</div>
+      <h2>界面一览</h2>
+    </div>
+    <div class="shots">
+      <figure class="shot">
+        <img src="img/disc.png" alt="黑胶唱片细节">
+        <figcaption>黑胶唱片 · 封面与唱臂细节</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="img/settings.png" alt="设置页">
+        <figcaption>设置中心 · 分组与开关控件</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Download</div>
+      <h2>下载安装</h2>
+      <p>安装包与版本清单由 GitHub Releases 自动分发，官网下载按钮始终指向最新版。</p>
+    </div>
+    <div class="dl-box">
+      <div class="info">
+        <h3>MyIsle <span class="ver" id="ver-dl">…</span></h3>
+        <div>安装包 <b id="size-dl">—</b> · 发布于 <b id="date-dl">—</b></div>
+        <div class="req">系统要求：Windows 10 / 11（x64）。绿色版（免安装压缩包）可在 Releases 页获取。</div>
+      </div>
+      <div class="actions">
+        <a class="btn btn-primary" id="btn-dl" href="https://github.com/lmf0828/MyIsle/releases/latest" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          下载安装包
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/lmf0828/MyIsle/releases" target="_blank" rel="noopener">全部版本 / 历史发布</a>
+      </div>
+    </div>
+    <div class="dl-note">提示：MyIsle 内置自动更新，安装后无需手动回官网升级。遇到问题欢迎在 <a href="https://github.com/lmf0828/MyIsle/issues" target="_blank" rel="noopener">GitHub Issues</a> 反馈。</div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 lmf0828 · MyIsle</span>
+    <a href="https://github.com/lmf0828/MyIsle" target="_blank" rel="noopener">GitHub 仓库</a>
+    <a href="https://github.com/lmf0828/MyIsle/issues" target="_blank" rel="noopener">问题反馈</a>
+    <span style="margin-left:auto">Powered by GitHub Pages</span>
+  </div>
+</footer>
+
+<script>
+(async () => {
+  const api = 'https://api.github.com/repos/lmf0828/MyIsle/releases/latest';
+  const set = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  try {
+    const rel = await fetch(api, { headers: { 'Accept': 'application/vnd.github+json' } }).then(r => { if (!r.ok) throw 0; return r.json(); });
+    const ver = (rel.tag_name || '').replace(/^v/i, '');
+    const assets = rel.assets || [];
+    const setup = assets.find(a => /^MyIsle-Setup-[\d.]+\.exe$/i.test(a.name)) || assets.find(a => /MyIsle-Setup-.*\.exe/i.test(a.name));
+    if (ver) set('ver-top', 'v' + ver), set('ver-dl', 'v' + ver);
+    if (setup) {
+      const mb = (setup.size / 1048576).toFixed(1) + ' MB';
+      set('size-top', mb); set('size-dl', mb);
+      document.getElementById('btn-dl-top').href = setup.browser_download_url;
+      document.getElementById('btn-dl').href = setup.browser_download_url;
+    }
+    if (rel.published_at) set('date-dl', rel.published_at.slice(0, 10));
+  } catch (e) {
+    set('ver-top', '');
+    set('ver-dl', '');
+    set('size-top', '');
+    set('size-dl', '');
+    set('date-dl', '');
+  }
+})();
+</script>
+</body>
+</html>
