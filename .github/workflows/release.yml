@@ -111,7 +111,7 @@ jobs:
           if (!(Test-Path $exe)) { throw "missing $exe" }
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
           $size = (Get-Item $exe).Length
-          $notes = "i岛 v$v"
+          $notes = "LingDao v$v"
           $obj = [ordered]@{
             version   = $v
             notes     = $notes
