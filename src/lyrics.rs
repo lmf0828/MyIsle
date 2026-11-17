@@ -620,56 +620,6 @@ fn soda_read_with_retry(title: &str, artist: &str, expected_dur: f64) -> Option<
     None
 }
 
-/// 仅取封面（网易云按歌名找一个时长接近的候选，只用它的 album.picUrl），不返回歌词。
-fn netease_cover_only(title: &str, artist: &str, expected_dur: f64) -> Option<Vec<u8>> {
-    let cands = find_song_candidates(title, artist);
-    if cands.is_empty() {
-        return None;
-    }
-    let mut idxs: Vec<usize> = (0..cands.len()).filter(|&i| cands[i].0 >= 10).collect();
-    if idxs.is_empty() {
-        idxs = (0..cands.len()).filter(|&i| cands[i].0 >= 4).collect();
-    }
-    if idxs.is_empty() {
-        return None;
-    }
-    idxs.sort_by(|&i, &j| {
-        let ci = (cands[i].2 - expected_dur).abs();
-        let cj = (cands[j].2 - expected_dur).abs();
-        ci.partial_cmp(&cj)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(cands[j].0.cmp(&cands[i].0))
-    });
-    for &ci in idxs.iter().take(5) {
-        let (_sc, id, cd) = cands[ci];
-        if expected_dur >= 30.0 && cd >= 5.0 && (cd - expected_dur).abs() > (expected_dur * 0.10).max(10.0) {
-            continue;
-        }
-        let durl = format!("https://music.163.com/api/song/detail?ids=[{}]", id);
-        if let Some(dj) = get_json(&durl) {
-            if let Some(url) = dj
-                .get("songs")
-                .and_then(|v| v.as_array())
-                .and_then(|a| a.get(0))
-                .and_then(|s0| s0.get("album"))
-                .and_then(|al| al.get("picUrl"))
-                .and_then(|u| u.as_str())
-            {
-                if !url.is_empty() {
-                    let u2 = if url.contains('?') {
-                        url.to_string()
-                    } else {
-                        format!("{}?param=400y400", url)
-                    };
-                    if let Some(b) = get_bytes(&u2) {
-                        return Some(b);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
 
 fn fetch_remote_net(
     title: &str,

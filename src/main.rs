@@ -1067,6 +1067,11 @@ impl IslandApp {
 
     /// 总时长估计：取 SMTC 时长与「歌词最后一句+6s」的较大者
     /// （汽水非会员常只给 30s 试听时长，用歌词长度兜底，进度条才不会被提前走完）。
+    fn app_is_soda(&self) -> bool {
+        let a = self.music.app_id.to_ascii_lowercase();
+        a.contains("汽水") || a.contains("soda") || a.contains("qishui")
+    }
+
     fn duration_est(&self) -> f64 {
         // 汽水：以播放条上读到的真实总时长为准（SMTC 常给错，如 30s 试听/旧值）。
         {
@@ -2993,7 +2998,7 @@ impl eframe::App for IslandApp {
             && self.music.has_position
             && self.music.duration > 20.0
             && self.music.position > 0.0;
-        if !smtc_timeline_ok && self.player_running_cached && self.netease_at.elapsed() >= Duration::from_millis(500) {
+        if !self.app_is_soda() && !smtc_timeline_ok && self.player_running_cached && self.netease_at.elapsed() >= Duration::from_millis(500) {
             self.netease_at = Instant::now();
             let _ne_t = std::time::Instant::now();
             let _ne_res = platform::netease_pos_dur().or_else(platform::netease_posdur_cached);
@@ -3061,7 +3066,11 @@ impl eframe::App for IslandApp {
             }
         }        // VIP 试听片段起点探测：播放时长 <60s（试听片段）时，扫描网易云内存日志里
         // 本轮播放开始后的 freeTrialInfo.start，把“片段内相对时间”映射到整首歌绝对时间。
-        if let Some((at, n)) = self.trial_probe {
+        if self.app_is_soda() {
+            // 汽水：不使用网易云试听探测，试听起点只由汽水自身逻辑处理
+            self.trial_probe = None;
+            self.trial_start = 0.0;
+        } else if let Some((at, n)) = self.trial_probe {
             if self.music.title.is_empty() || self.netease_dur >= 60.0 {
                 self.trial_probe = None;
                 self.trial_start = 0.0;
@@ -3101,8 +3110,12 @@ impl eframe::App for IslandApp {
             self.cover_tex = None;
             self.pending_title = None;
             self.netease_dur = 0.0;
-            // 进度优先用网易云内存真实位置，取不到再用播放器上报
-            if let Some((p, d)) = platform::netease_pos_dur() {
+            // 进度：汽水只用自身 SMTC/CDP 时间；其它播放器优先用网易云内存真实位置
+            if self.app_is_soda() {
+                self.spos_valid = self.music.has_position && self.music.position > 0.0;
+                self.spos = self.music.position;
+                self.spos_at = Instant::now();
+            } else if let Some((p, d)) = platform::netease_pos_dur() {
                 self.netease_dur = d;
                 self.spos = p;
                 self.spos_at = Instant::now();
