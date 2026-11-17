@@ -2675,7 +2675,7 @@ impl IslandApp {
             painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, egui::FontId::proportional(11.5), col);
             if self.show_row_update() {
                 painter.circle_filled(
-                    egui::pos2(up_row.left() + 4.0, y + row_h * 0.5),
+                    egui::pos2(right - 4.0, y + row_h * 0.5 - 8.0),
                     3.0,
                     accent,
                 );
