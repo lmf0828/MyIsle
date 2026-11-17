@@ -2676,7 +2676,33 @@ impl IslandApp {
             } else {
                 (format!("v{} · 检查更新", update::VERSION), muted2)
             };
-            painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, egui::FontId::proportional(11.5), col);
+            let font = egui::FontId::proportional(11.5);
+            if !self.upd_busy && self.upd_ver.is_some() {
+                // 中文标签与版本号分开绘制并按垂直中心对齐，避免中英文字形基线不同造成“上下错位”
+                let m = self.upd_ver.as_ref().unwrap();
+                let version = format!("v{} ›", m.version);
+                let vfont = egui::FontId::proportional(13.0);
+                let vw = painter
+                    .layout_no_wrap(version.clone(), vfont.clone(), accent)
+                    .size()
+                    .x;
+                painter.text(
+                    egui::pos2(right, y + row_h * 0.5 + 8.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                    version,
+                    vfont,
+                    accent,
+                );
+                painter.text(
+                    egui::pos2(right - vw - 5.0, y + row_h * 0.5 + 8.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                    "发现新版本",
+                    font,
+                    accent,
+                );
+            } else {
+                painter.text(egui::pos2(right, y + row_h * 0.5), egui::Align2::RIGHT_CENTER, txt, font, col);
+            }
             if self.show_row_update() {
                 painter.circle_filled(
                     egui::pos2(right - 4.0, y + row_h * 0.5 - 8.0),
