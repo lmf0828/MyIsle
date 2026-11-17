@@ -676,6 +676,10 @@ struct IslandApp {
     click_through: bool,
     /// 当前已设置的窗口区域 (l,t,r,b,rad)（物理像素，窗口本地）。避免每帧重?SetWindowRgn?
     region: (i32, i32, i32, i32, i32),
+    /// 上一帧 SetWindowRgn 耗时（毫秒），仅用于性能诊断日志
+    perf_region_ms: f32,
+    /// 上一帧网易云内存读取耗时（毫秒），仅用于诊断
+    perf_netease_ms: f32,
     /// 音乐模块：最近一次 SMTC 读取到的播放信息
     music: smtc::Track,
     /// SMTC 轮询器（主线程非阻塞状态机，见 smtc.rs）
@@ -708,8 +712,12 @@ struct IslandApp {
     last_soda_heal: Instant,
     /// 启动后是否已做过一次「汽水补丁」检查（未运行时直接补好）。
     soda_boot_checked: bool,
+    /// 汽水补丁自检是否正在后台执行，避免重复进入（该检查含网络/进程操作，放后台防卡顿）。
+    soda_tick_busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// 上次从汽水界面读取真实播放位置的时间（节流用）。
     soda_pos_at: Instant,
+    /// 汽水进度查询放在后台线程，避免 CDP 网络抖动阻塞 UI 渲染（丝滑度关键）。
+    soda_prog_rx: Option<std::sync::mpsc::Receiver<Option<(f64, f64)>>>,
     /// 从汽水播放条读到的真实总时长（秒），用于纠正 SMTC 给错的时长。
     soda_dur: f64,
     /// 汽水歌词「还没拿到」时的自动重试节流与次数。
@@ -729,6 +737,9 @@ struct IslandApp {
     /// 兜底：SMTC 不可用时，从播放器窗口标题抓 “歌名 - 歌手”
     media_title_at: Instant,
     media_title_cache: Option<(String, String, String)>,
+    /// 播放器进程检测结果缓存（枚举进程较慢，最多每秒查一次，避免无音乐时每帧 50ms+ 卡顿）
+    player_running_cached: bool,
+    player_running_at: Instant,
     /// 从“有歌”变成“没有歌”的起始时刻，用于延迟清除残留的音乐状态
     music_lost_since: Option<Instant>,
     /// 最近一次拿到的好歌名（用于播放器短时读不到标题时保持稳定，避免闪烁/来回切换）
@@ -847,6 +858,8 @@ impl IslandApp {
             full: false,
             hover_hold: None,
             region: (i32::MIN, 0, 1, 1, 0),
+            perf_region_ms: 0.0,
+            perf_netease_ms: 0.0,
             click_through: false,
             music: smtc::Track::default(),
             tracker: smtc::Tracker::new(),
@@ -869,7 +882,9 @@ impl IslandApp {
             smtc_rep_pos: -1.0,
             last_soda_heal: Instant::now() - Duration::from_secs(3600),
             soda_boot_checked: false,
+            soda_tick_busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             soda_pos_at: Instant::now() - Duration::from_secs(3600),
+            soda_prog_rx: None,
             soda_dur: 0.0,
             lyr_retry_at: Instant::now() - Duration::from_secs(3600),
             lyr_retry_n: 0,
@@ -884,6 +899,8 @@ impl IslandApp {
             cover_tex: None,
             media_title_at: Instant::now() - Duration::from_secs(10),
             media_title_cache: None,
+            player_running_cached: false,
+            player_running_at: Instant::now() - Duration::from_secs(10),
             music_lost_since: None,
             last_title: None,
             last_title_at: Instant::now() - Duration::from_secs(60),
@@ -1001,6 +1018,15 @@ impl IslandApp {
     }
 
     /// 有效播放状态：SMTC 可用时以真实状态为准；否则用本地乐观状态（媒体键控制无法回读）。
+    /// 播放器进程是否在运行（结果缓存 1 秒；进程枚举在无音乐时很贵，不能每帧做）。
+    fn player_is_running(&mut self) -> bool {
+        if self.player_running_at.elapsed() >= Duration::from_secs(1) {
+            self.player_running_cached = platform::player_running();
+            self.player_running_at = Instant::now();
+        }
+        self.player_running_cached
+    }
+
     fn is_playing(&self) -> bool {
         if let Some((v, t)) = self.override_play {
             if std::time::Instant::now() < t {
@@ -1379,12 +1405,33 @@ impl IslandApp {
             (l, t, r.max(l + 1), b.max(t + 1), rad)
         };
         if target != self.region {
-            let cr = self.cfg.position.corner_radius(1.0);
-            platform::set_window_region_round(
-                self.hwnd, target.0, target.1, target.2, target.3, target.4,
-                cr.nw == 0, cr.ne == 0, cr.sw == 0, cr.se == 0,
-            );
-            self.region = target;
+            // 动画/拖动过程中不要逐帧重建窗口区域：SetWindowRgn 每帧调用会明显掉帧。
+            // 过渡期间只“扩张不收缩”（用新旧区域的并集），等动画结束落定后再一次性裁到最终形状。
+            let transitioning = (self.expanded - self.target).abs() > 0.002
+                || (self.music_amt > 0.001 && self.music_amt < 0.999)
+                || self.dragging
+                || self.settle.is_some();
+            let mut apply = target;
+            if transitioning && self.region.0 != i32::MIN && !(self.region.2 <= 1 && self.region.3 <= 1) {
+                let (pl, pt, pr, pb, prad) = self.region;
+                apply = (
+                    target.0.min(pl),
+                    target.1.min(pt),
+                    target.2.max(pr),
+                    target.3.max(pb),
+                    target.4.max(prad),
+                );
+            }
+            if apply != self.region {
+                let cr = self.cfg.position.corner_radius(1.0);
+                let _rt = std::time::Instant::now();
+                platform::set_window_region_round(
+                    self.hwnd, apply.0, apply.1, apply.2, apply.3, apply.4,
+                    cr.nw == 0, cr.ne == 0, cr.sw == 0, cr.se == 0,
+                );
+                self.perf_region_ms = _rt.elapsed().as_secs_f32() * 1000.0;
+                self.region = apply;
+            }
         }
     }
 
@@ -2806,9 +2853,13 @@ impl eframe::App for IslandApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let _pf_t0 = std::time::Instant::now();
+        self.perf_region_ms = 0.0;
+        self.perf_netease_ms = 0.0;
         self.poll_update();
         self.ensure_window(frame);
         platform::ensure_erase_guard(self.hwnd);
+        let _pf_t_win = std::time::Instant::now();
         // 久置后第一次刷新前：先把客户区同步刷成深色，盖住系统重绘那一帧可能露出的白底。
         // 这是"预填充背景"（double-buffer 的常用做法），不是简单改色——它保证那一帧本来就是深色。
         let _gap = self.last_tick.elapsed();
@@ -2830,7 +2881,9 @@ impl eframe::App for IslandApp {
         }
 
         // 音乐模块：主线程非阻塞推进 SMTC 状态机，取最新快照
+        let _pf_t_snap0 = std::time::Instant::now();
         self.music = self.tracker.snapshot();
+        let _pf_snap_ms = _pf_t_snap0.elapsed().as_secs_f32() * 1000.0;
         // 记录本次快照是否真的来自 SMTC（否则后面的窗口标题兜底会覆盖它）
         self.from_smtc = self.music.has_session && !self.music.title.is_empty();
         // 汽水 CDP 补丁自检：汽水自动更新会覆盖 app.asar 里的调试端口补丁导致歌词失效。
@@ -2840,13 +2893,25 @@ impl eframe::App for IslandApp {
             // 启动时若汽水没在运行，直接把补丁补好（运行中会被独占锁，交给下面的 5s 自检）。
             crate::soda_patch::boot_check();
         }
-        if self.last_soda_heal.elapsed() > Duration::from_secs(15) {
+        if self.last_soda_heal.elapsed() > Duration::from_secs(15)
+            && !self
+                .soda_tick_busy
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
             self.last_soda_heal = Instant::now();
             let aid = self.music.app_id.to_lowercase();
             let is_soda = self.music.has_session
                 && (aid.contains("汽水") || aid.contains("soda") || aid.contains("qishui"));
             if is_soda {
-                crate::soda_patch::tick(self.music.playing);
+                let playing = self.music.playing;
+                let flag = self.soda_tick_busy.clone();
+                std::thread::spawn(move || {
+                    crate::soda_patch::tick(playing);
+                    flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                });
+            } else {
+                self.soda_tick_busy
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
             }
         }
         // 调试：MYISLE_DEMO="歌名|歌手" 时注入一条虚拟曲目，用于无播放器环境验证界面/动画
@@ -2930,7 +2995,7 @@ impl eframe::App for IslandApp {
             ));
             self.last_title_at = Instant::now();
         } else if let Some((exe, t, a)) = self.last_title.clone() {
-            if platform::player_running() {
+            if self.music.title.is_empty() && self.player_is_running() {
                 self.music.has_session = true;
                 self.music.playing = true;
                 self.music.title = t;
@@ -2943,7 +3008,14 @@ impl eframe::App for IslandApp {
             self.music.has_session = true;
         }
         // 播放器退出后：连续 2 秒拿不到歌且播放器进程已不在，就清空残留音乐状态，收起态回到只显示时间
-        if self.music.title.is_empty() && !platform::player_running() {
+        let _pf_pr0 = std::time::Instant::now();
+        let _player_running = if self.music.title.is_empty() {
+            self.player_is_running()
+        } else {
+            true
+        };
+        let _pf_player_ms = _pf_pr0.elapsed().as_secs_f32() * 1000.0;
+        if self.music.title.is_empty() && !_player_running {
             let since = *self.music_lost_since.get_or_insert_with(Instant::now);
             if since.elapsed() >= Duration::from_secs(2) {
                 self.music = smtc::Track::default();
@@ -2985,9 +3057,12 @@ impl eframe::App for IslandApp {
             && self.music.has_position
             && self.music.duration > 20.0
             && self.music.position > 0.0;
-        if !smtc_timeline_ok && self.netease_at.elapsed() >= Duration::from_millis(250) {
+        if !smtc_timeline_ok && self.player_running_cached && self.netease_at.elapsed() >= Duration::from_millis(500) {
             self.netease_at = Instant::now();
-            if let Some((p, d)) = platform::netease_pos_dur().or_else(platform::netease_posdur_cached) {
+            let _ne_t = std::time::Instant::now();
+            let _ne_res = platform::netease_pos_dur().or_else(platform::netease_posdur_cached);
+            self.perf_netease_ms = _ne_t.elapsed().as_secs_f32() * 1000.0;
+            if let Some((p, d)) = _ne_res {
                 self.netease_dur = d;
 
                 self.spos = p;
@@ -3012,14 +3087,25 @@ impl eframe::App for IslandApp {
         if self.from_smtc {
             let a = self.music.app_id.to_ascii_lowercase();
             if a.contains("汽水") || a.contains("soda") || a.contains("qishui") {
-                if self.soda_pos_at.elapsed() >= Duration::from_millis(400) {
+                if self.soda_pos_at.elapsed() >= Duration::from_millis(400)
+                    && self.soda_prog_rx.is_none()
+                {
                     self.soda_pos_at = Instant::now();
                     let dur = if self.music.duration > 20.0 {
                         self.music.duration
                     } else {
                         self.duration_est()
                     };
-                    if let Some((p, tot)) = crate::cdp_lyric::fetch_progress(dur) {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.soda_prog_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let _ = tx.send(crate::cdp_lyric::fetch_progress(dur));
+                    });
+                }
+                let recv = self.soda_prog_rx.as_ref().map(|rx| rx.try_recv());
+                match recv {
+                    Some(Ok(Some((p, tot)))) => {
+                        self.soda_prog_rx = None;
                         self.soda_dur = tot;
                         // 进度条 width 的采样有量化误差：小幅“倒退”是误差，不是真的往回拖，
                         // 直接采用会让逐字高亮退回一两个字。略过小幅倒退，只接受前进或真正的后退拖动。
@@ -3031,6 +3117,10 @@ impl eframe::App for IslandApp {
                             self.spos_valid = true;
                         }
                     }
+                    Some(Ok(None)) | Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                        self.soda_prog_rx = None;
+                    }
+                    Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => {}
                 }
             }
         }        // VIP 试听片段起点探测：播放时长 <60s（试听片段）时，扫描网易云内存日志里
@@ -3272,6 +3362,7 @@ impl eframe::App for IslandApp {
             }
         }
 
+        let _pf_t_state = std::time::Instant::now();
         self.handle_drag(ctx);
         self.drive_animation(ctx);
         // 调试：展开后若指定了 MYISLE_PAGE，定位对应视图
@@ -3311,17 +3402,67 @@ impl eframe::App for IslandApp {
         // 窗口尺寸始终不变 -> 不重?surface -> 不闪烁?
         self.apply_region(ctx);
 
+        let _pf_t_pre = std::time::Instant::now();
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| self.draw(ui));
-
+        let _pf_t_draw = std::time::Instant::now();
         self.settings_ui(ctx);
+        let _pf_t_post = std::time::Instant::now();
 
-        // 持续以 60fps 重绘（即使空闲）：避免 DWM 长时间无新帧而回收窗口合成表面，
-        // 从而在"久置后第一次交互"时用白底补一帧。代价很小（场景极简）。
-        let _ = (self.expanded - self.target).abs() > 0.001;
-        ctx.request_repaint_after(Duration::from_millis(16));
+        // 自适应重绘：展开态、播放中、悬停/拖动时保持 60fps；收起且静止时降到 10fps，
+        // 避免空闲也满核渲染导致发热、掉帧和「不丝滑」。
+        let pointer_active = ctx.input(|i| i.pointer.has_pointer() || i.pointer.any_down());
+        let animating = (self.expanded - self.target).abs() > 0.002
+            || self.expanded > 0.01
+            || self.music.playing
+            || self.music_amt > 0.01
+            || self.dragging
+            || self.settle.is_some()
+            || pointer_active;
+        let ms = if animating { 16 } else { 200 };
+        if std::env::var_os("MYISLE_PERF").is_some() {
+            let el = _pf_t0.elapsed().as_secs_f32() * 1000.0;
+            let (dt, udt) = ctx.input(|i| (i.stable_dt, i.unstable_dt));
+            if el > 12.0 || dt > 0.020 {
+                use std::io::Write as _;
+                let line = format!(
+                    "{} update={:.1}ms (win={:.1} state={:.1} post={:.1} draw={:.1}) snap={:.1} player={:.1} ne={:.1} region={:.1}ms stable_dt={:.1}ms exp={:.3} tgt={:.3} amt={:.3} playing={}\n",
+                    chrono_like_now(),
+                    el,
+                    (_pf_t_win - _pf_t0).as_secs_f32() * 1000.0,
+                    (_pf_t_state - _pf_t_win).as_secs_f32() * 1000.0,
+                    (_pf_t_pre - _pf_t_state).as_secs_f32() * 1000.0,
+                    (_pf_t_draw - _pf_t_pre).as_secs_f32() * 1000.0,
+                    _pf_snap_ms,
+                    _pf_player_ms,
+                    self.perf_netease_ms,
+                    self.perf_region_ms,
+                    dt * 1000.0,
+                    self.expanded,
+                    self.target,
+                    self.music_amt,
+                    self.music.playing,
+                );
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(crate::paths::file("perf.log"))
+                {
+                    let _ = f.write_all(line.as_bytes());
+                }
+            }
+        }
+        ctx.request_repaint_after(Duration::from_millis(ms));
     }
+}
+
+fn chrono_like_now() -> String {
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let s = d.as_secs() % 86400;
+    format!("{:02}:{:02}:{:02}.{:03}", s / 3600, (s % 3600) / 60, s % 60, d.subsec_millis())
 }
 
 /// 左侧菜单图标：0=音乐(音符) 1=日程(日历) 2=天气(云)——使用系统图标字体。

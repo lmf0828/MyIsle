@@ -246,43 +246,59 @@ fn norm(s: &str) -> String {
 /// 读取当前在播歌曲的官方歌词。`title`/`artist` 用于防止切歌瞬间读到上一首。
 pub fn fetch_current(title: &str, artist: &str) -> Option<SodaLyric> {
     let want_t = norm(title);
-    for attempt in 0..3 {
+    let mut moved_window = false;
+    let mut result = None;
+    for attempt in 0..4 {
+        let mut retry = false;
         if let Some(v) = evaluate(EXPR) {
             let r = v.get("result").and_then(|x| x.get("result"));
             let val = r.and_then(|x| x.get("value"));
             if let Some(o) = val {
                 if o.get("ok").and_then(|x| x.as_bool()) == Some(true) {
                     let name = o.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let content = o.get("content").and_then(|x| x.as_str()).unwrap_or("").to_string();
                     let got_t = norm(&name);
                     let name_ok = want_t.is_empty()
                         || got_t == want_t
                         || got_t.contains(&want_t)
                         || want_t.contains(&got_t);
-                    if name_ok {
-                        return Some(SodaLyric {
+                    if name_ok && !content.trim().is_empty() {
+                        result = Some(SodaLyric {
                             name,
                             artist: o.get("artist").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                             duration: o.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
-                            content: o.get("content").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            content,
                             cn: o.get("cn").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                         });
+                        break;
                     }
+                    retry = true;
                 } else {
-                    // 还没有歌词视图（可能刚启动），稍等再试
                     dlog(&format!(
                         "cdp not ready: {}",
                         o.get("why").and_then(|x| x.as_str()).unwrap_or("?")
                     ));
+                    retry = true;
                 }
             }
         }
-        if attempt < 2 {
-            std::thread::sleep(Duration::from_millis(250));
+        // 隐藏/最小化的汽水窗口不会渲染歌词 DOM：临时把主窗显示到屏幕外，并切到播放页。
+        if retry && attempt == 0 {
+            moved_window = crate::soda_patch::show_soda_offscreen();
+            let _ = evaluate(NAV_PLAYER_EXPR);
+            std::thread::sleep(Duration::from_millis(900));
+        } else if retry && attempt < 3 {
+            std::thread::sleep(Duration::from_millis(350));
         }
     }
+    if moved_window {
+        crate::soda_patch::hide_soda_windows();
+    }
     let _ = artist;
-    None
+    result
 }
+
+const NAV_PLAYER_EXPR: &str = r#"(()=>{try{const p={enter_method:'click_player_icon_below',scene_name:'radio'};const h='#/player?et_params='+encodeURIComponent(JSON.stringify(p));if(location.hash.indexOf('/player')<0){location.hash=h;}return location.hash;}catch(e){return 'err';}})()"#;
 
 const PROG_EXPR: &str = r#"(()=>{
   const bp=document.querySelector('.bottom-player');

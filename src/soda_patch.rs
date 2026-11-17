@@ -400,25 +400,31 @@ pub fn cdp_up() -> bool {
     }
 }
 
-/// 供设置页展示的「汽水状态」缓存（3 秒刷新一次，避免每帧探测卡 UI）。
+/// 供设置页展示的「汽水状态」缓存：返回上次结果，过期后在后台刷新，绝不阻塞 UI 线程。
 pub fn status_cached() -> (bool, bool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<Option<(Instant, (bool, bool))>>> = OnceLock::new();
+    static REFRESHING: AtomicBool = AtomicBool::new(false);
     let m = CACHE.get_or_init(|| Mutex::new(None));
-    {
-        if let Ok(g) = m.lock() {
-            if let Some((t, s)) = *g {
-                if t.elapsed() < Duration::from_secs(3) {
-                    return s;
-                }
-            }
+    let cached = m.lock().ok().and_then(|g| *g);
+    if let Some((t, s)) = cached {
+        if t.elapsed() < Duration::from_secs(3) {
+            return s;
         }
     }
-    let s = (soda_running(), cdp_up());
-    if let Ok(mut g) = m.lock() {
-        *g = Some((Instant::now(), s));
+    if !REFRESHING.swap(true, Ordering::Relaxed) {
+        std::thread::spawn(move || {
+            let s = (soda_running(), cdp_up());
+            if let Some(m) = CACHE.get() {
+                if let Ok(mut g) = m.lock() {
+                    *g = Some((Instant::now(), s));
+                }
+            }
+            REFRESHING.store(false, Ordering::Relaxed);
+        });
     }
-    s
+    cached.map(|(_, s)| s).unwrap_or((false, false))
 }
 pub fn soda_running() -> bool {
     !crate::soda_lyrics::soda_pids().is_empty()
@@ -764,5 +770,91 @@ mod tests {
             patched, entry.len(), out.len(), p2, e2.len(), leaves.len(), bad
         );
         if std::env::var("KEEP_ROUNDTRIP").is_err() { let _ = std::fs::remove_file(&tmp); } else { println!("KEPT {}", tmp.display()); }
+    }
+}
+
+static OFFSCREEN_SAVED: Mutex<Option<(isize, i32, i32, i32, i32, isize)>> = Mutex::new(None);
+
+pub fn show_soda_offscreen() -> bool {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+        GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetWindowLongPtrW, SetWindowPos,
+        ShowWindow, GWL_EXSTYLE, HWND_TOP, SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN, SWP_NOACTIVATE,
+        SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+    struct Ctx<'a> { pids: &'a [u32], found: Option<HWND> }
+    unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
+        let ctx = &mut *(lp.0 as *mut Ctx);
+        let mut pid = 0u32;
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if ctx.pids.contains(&pid) && GetWindowTextLengthW(hwnd) > 0 {
+            ctx.found = Some(hwnd);
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
+    let pids = crate::soda_lyrics::soda_pids();
+    if pids.is_empty() { return false; }
+    let mut ctx = Ctx { pids: &pids, found: None };
+    unsafe { let _ = EnumWindows(Some(cb), LPARAM(&mut ctx as *mut _ as isize)); }
+    let hwnd = match ctx.found { Some(h) => h, None => return false };
+    unsafe {
+        if IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
+            return false;
+        }
+        let mut r = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut r);
+        let w = (r.right - r.left).max(1000);
+        let h = (r.bottom - r.top).max(700);
+        let old_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if let Ok(mut s) = OFFSCREEN_SAVED.lock() {
+            *s = Some((hwnd.0 as isize, r.left, r.top, w, h, old_style));
+        }
+        // 从任务栏/Alt-Tab 隐藏，并禁止激活
+        let new_style = old_style
+            | (WS_EX_TOOLWINDOW.0 as isize)
+            | (WS_EX_NOACTIVATE.0 as isize);
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+        // 放到所有显示器左侧之外的虚拟区域，确保任何多屏布局都不可见
+        let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let _ = vw;
+        let left_x = vx - w - 80;
+        let _ = SetWindowPos(hwnd, HWND_TOP, left_x, 0, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+    true
+}
+
+pub fn hide_soda_windows() {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, SetWindowLongPtrW, SetWindowPos,
+        ShowWindow, GWL_EXSTYLE, HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+    };
+    struct Ctx<'a> { pids: &'a [u32] }
+    unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
+        let ctx = &mut *(lp.0 as *mut Ctx);
+        let mut pid = 0u32;
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if ctx.pids.contains(&pid) && GetWindowTextLengthW(hwnd) > 0 {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+        BOOL(1)
+    }
+    let pids = crate::soda_lyrics::soda_pids();
+    if pids.is_empty() { return; }
+    let mut ctx = Ctx { pids: &pids };
+    unsafe { let _ = EnumWindows(Some(cb), LPARAM(&mut ctx as *mut _ as isize)); }
+    if let Ok(mut s) = OFFSCREEN_SAVED.lock() {
+        if let Some((hw, ox, oy, ow, oh, old_style)) = s.take() {
+            let h = HWND(hw as *mut _);
+            unsafe {
+                let _ = SetWindowLongPtrW(h, GWL_EXSTYLE, old_style);
+                let _ = SetWindowPos(h, HWND_TOP, ox, oy, ow, oh,
+                    SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+        }
     }
 }

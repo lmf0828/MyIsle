@@ -877,6 +877,19 @@ fn pids_named(name: &str) -> Vec<u32> {    let mut out = Vec::new();
 /// 是否有已知播放器进程在运行（网易云/汽水/QQ音乐/Spotify/酷狗/酷我）。
 /// 注意：这里用 exe 文件名粗判，可能有极短误判窗口，但足以用来决定“该不该保留上次的歌名”。
 pub fn player_running() -> bool {
+    static WATCH: std::sync::Once = std::sync::Once::new();
+    WATCH.call_once(|| {
+        std::thread::spawn(|| loop {
+            PLAYER_RUN.store(player_running_now(), std::sync::atomic::Ordering::Relaxed);
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+        });
+    });
+    PLAYER_RUN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static PLAYER_RUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn player_running_now() -> bool {
     const NAMES: [&str; 6] = [
         "cloudmusic.exe",
         "sodamusic.exe",
@@ -885,12 +898,32 @@ pub fn player_running() -> bool {
         "kugou.exe",
         "kuwo.exe",
     ];
-    for n in NAMES {
-        if !pids_named(n).is_empty() {
-            return true;
+    // 只做一次进程快照，避免对每个名字都枚举一遍（原来 6 次快照单帧要 50~80ms）。
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(0x00000002, 0);
+        if snap == -1 {
+            return false;
         }
+        let mut pe: ProcessEntry32W = std::mem::zeroed();
+        pe.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+        let mut found = false;
+        if Process32FirstW(snap, &mut pe) != 0 {
+            loop {
+                let end = pe.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260);
+                let exe = String::from_utf16_lossy(&pe.sz_exe_file[..end]);
+                if NAMES.iter().any(|n| exe.eq_ignore_ascii_case(n)) {
+                    found = true;
+                    break;
+                }
+                pe.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+                if Process32NextW(snap, &mut pe) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
+        found
     }
-    false
 }
 
 // ---------- 网易云内存时间轴：偏移自动发现 + 持久化 ----------
