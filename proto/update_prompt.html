@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>灵岛 · 更新提示位置原型</title>
+<style>
+  :root{
+    --bg:#0b0c10; --stage:#101116; --panel:#16171c; --panel2:#1b1d23;
+    --card:#22242b; --line:#2d3038; --line-soft:rgba(255,255,255,.07);
+    --text:#eef1f6; --muted:#9aa1ad; --muted2:#6c737f;
+    --mint:#34d399; --mint2:#4ade80; --danger:#f87171;
+    --radius:18px; --shadow:0 24px 60px rgba(0,0,0,.55);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:
+      radial-gradient(1100px 500px at 50% -10%, #1a2030 0%, transparent 60%),
+      var(--bg);
+    color:var(--text);font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    padding:36px 28px 80px;}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.5px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:26px}
+  .sub b{color:var(--mint2)}
+  .cap{font-size:12px;color:var(--muted);margin:0 0 12px 4px;letter-spacing:.3px}
+  .cap b{color:var(--text)}
+  .row{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start}
+  .artboard{margin-bottom:36px}
+  .note{font-size:12px;color:var(--muted2);margin-top:10px;max-width:760px;line-height:1.65}
+  .note b{color:var(--muted)}
+
+  /* ============ 面板仿制 ============ */
+  .panel{
+    width:760px;height:430px;background:linear-gradient(180deg,#191b21,#141519);
+    border:1px solid rgba(255,255,255,.06);border-radius:26px;box-shadow:var(--shadow);
+    display:flex;overflow:hidden;position:relative;
+  }
+  .rail{width:92px;background:rgba(10,11,14,.55);padding:14px 10px;display:flex;flex-direction:column;gap:6px;
+        border-right:1px solid rgba(255,255,255,.04)}
+  .ritem{border:0;background:transparent;color:#aeb4bf;border-radius:14px;padding:10px 6px;display:flex;flex-direction:column;
+         align-items:center;gap:5px;font-size:11px;font-family:inherit;cursor:default}
+  .ritem .g{font-size:18px}
+  .ritem.active{background:rgba(52,211,153,.16);color:var(--mint2)}
+  .content{flex:1;padding:16px 18px 14px;position:relative;display:flex;flex-direction:column}
+  .topline{display:flex;align-items:center;gap:8px;min-height:22px}
+  .gear{margin-left:auto;color:#aeb4bf;font-size:17px;position:relative}
+  .gear .dot{position:absolute;right:-3px;top:-3px;width:8px;height:8px;border-radius:50%;
+             background:var(--mint2);box-shadow:0 0 0 2px #16171c}
+  .music{display:flex;gap:18px;flex:1;min-height:0}
+  .disc{width:150px;height:150px;border-radius:50%;flex:none;
+        background:radial-gradient(circle at 50% 50%, #2c2f38 0 28%, #15161b 29% 30%, #262a33 31% 36%, #15161b 37% 38%, #232730 39% 44%, #15161b 45% 46%, #262a33 47% 100%);
+        border:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center}
+  .disc img,.disc .cover{width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#d9b48f,#8f6a4c)}
+  .meta{flex:1;display:flex;flex-direction:column;min-width:0}
+  .title{font-size:17px;font-weight:700}
+  .sub2{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .bar{height:6px;border-radius:4px;background:#2a2d35;margin-top:12px;position:relative}
+  .bar .fill{height:100%;width:42%;border-radius:4px;background:linear-gradient(90deg,#22c58b,#4ade80)}
+  .times{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted2);margin-top:5px}
+  .lyrs{margin-top:10px;display:flex;flex-direction:column;gap:8px;font-size:13px;color:#6f7682;text-align:center}
+  .lyrs .on{color:var(--mint2);font-weight:600;text-shadow:0 0 18px rgba(74,222,128,.28)}
+
+  /* 横幅 A */
+  .ubanner{
+    display:flex;align-items:center;gap:10px;height:34px;padding:0 12px;margin-bottom:12px;
+    border:1px solid rgba(52,211,153,.30);border-radius:12px;
+    background:linear-gradient(90deg, rgba(52,211,153,.14), rgba(52,211,153,.04));
+  }
+  .ubanner .pill{font-size:10px;font-weight:700;color:#06251b;background:var(--mint2);
+                 padding:2px 7px;border-radius:20px;letter-spacing:.4px}
+  .ubanner .t{font-size:12.5px;color:#dcefe4}
+  .ubanner .t em{font-style:normal;color:var(--mint2);font-weight:700}
+  .ubanner .acts{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .ubtn{border:0;background:var(--mint);color:#06251b;font-weight:700;font-size:11.5px;
+        padding:5px 12px;border-radius:8px;font-family:inherit;cursor:pointer}
+  .ubtn.ghost{background:transparent;color:#aeb4bf;border:1px solid var(--line)}
+  .x{color:var(--muted2);font-size:14px;line-height:1;cursor:pointer}
+
+  /* 悬浮卡 B */
+  .ucard{
+    position:absolute;right:16px;top:48px;width:286px;z-index:5;
+    background:linear-gradient(180deg,#20232b,#1b1d24);
+    border:1px solid rgba(52,211,153,.28);border-radius:16px;
+    box-shadow:0 18px 40px rgba(0,0,0,.55);padding:14px 14px 12px;
+  }
+  .ucard .hd{display:flex;align-items:center;gap:8px}
+  .ucard .hd .ic{width:26px;height:26px;border-radius:8px;background:rgba(52,211,153,.16);
+                 display:flex;align-items:center;justify-content:center;color:var(--mint2);font-size:14px}
+  .ucard .hd .tt{font-size:13.5px;font-weight:700}
+  .ucard .hd .x{margin-left:auto}
+  .ucard .ver{margin-top:8px;font-size:11px;color:var(--muted)}
+  .ucard .ver b{color:var(--mint2)}
+  .ucard .notes{margin:9px 0 11px;font-size:11.5px;color:#c7ccd4;line-height:1.6;
+                border-left:2px solid rgba(52,211,153,.35);padding-left:8px}
+  .ucard .acts{display:flex;gap:8px}
+  .ucard .acts .ubtn{flex:1;text-align:center}
+
+  /* 设置页行 */
+  .setpanel{width:760px;height:430px;background:linear-gradient(180deg,#191b21,#141519);
+            border:1px solid rgba(255,255,255,.06);border-radius:26px;box-shadow:var(--shadow);
+            overflow:hidden;display:flex;flex-direction:column}
+  .p-head{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line-soft)}
+  .logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#1d3a2e,#10241d);
+        display:flex;align-items:center;justify-content:center}
+  .logo i{width:10px;height:10px;border-radius:50%;background:var(--mint2);display:block;
+          box-shadow:0 0 12px rgba(74,222,128,.7)}
+  .p-title .name{font-size:14px;font-weight:700;display:block}
+  .p-title .ver{font-size:11px;color:var(--muted)}
+  .p-body{padding:16px 20px;display:flex;flex-direction:column;gap:16px;flex:1}
+  .grp-t{font-size:10.5px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted2);margin:0 0 9px 2px}
+  .card{background:var(--card);border:1px solid var(--line-soft);border-radius:14px;padding:4px 14px}
+  .srow{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+  .srow:last-child{border-bottom:0}
+  .srow .info .t{font-size:12.5px;font-weight:600}
+  .srow .info .d{font-size:11px;color:var(--muted);margin-top:2px}
+  .srow .right{margin-left:auto;display:flex;align-items:center;gap:9px}
+  .tag{font-size:10px;font-weight:700;color:#06251b;background:var(--mint2);padding:2px 8px;border-radius:20px}
+  .tag.gray{background:#2c2f38;color:#9aa1ad}
+  .mini-btn{font-size:11px;font-family:inherit;border:1px solid var(--line);background:#2a2d35;color:#dfe4ec;
+            padding:5px 10px;border-radius:8px;cursor:pointer}
+  .mini-btn.mint{background:var(--mint);color:#06251b;border-color:transparent;font-weight:700}
+
+  /* 弹窗 */
+  .overlay{position:absolute;inset:0;background:rgba(6,8,11,.62);backdrop-filter:blur(2px);
+           display:flex;align-items:center;justify-content:center;z-index:10}
+  .dialog{width:400px;background:linear-gradient(180deg,#1f222a,#181a20);border:1px solid var(--line);
+          border-radius:20px;padding:22px;box-shadow:0 30px 60px rgba(0,0,0,.6)}
+  .dialog h3{margin:0 0 6px;font-size:16px}
+  .dialog p{margin:0;color:var(--muted);font-size:12px;line-height:1.7}
+  .dl{height:8px;background:#2a2d35;border-radius:6px;margin:16px 0 8px;overflow:hidden}
+  .dl i{display:block;height:100%;width:62%;border-radius:6px;background:linear-gradient(90deg,#22c58b,#4ade80)}
+  .dl-meta{display:flex;justify-content:space-between;font-size:11px;color:var(--muted2)}
+  .dialog .acts{display:flex;gap:9px;margin-top:18px}
+  .dialog .acts .ubtn{flex:1;text-align:center;padding:9px}
+  .collapsed{width:430px;height:56px;border-radius:28px;background:linear-gradient(180deg,#191b21,#141519);
+             border:1px solid rgba(255,255,255,.06);box-shadow:var(--shadow);display:flex;align-items:center;
+             gap:14px;padding:0 20px;position:relative}
+  .collapsed .cl{flex:1;font-size:12px;color:#d9dee6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .collapsed .tm{font-size:20px;font-weight:700;letter-spacing:.5px}
+  .collapsed .udot{width:9px;height:9px;border-radius:50%;background:var(--mint2);
+                   box-shadow:0 0 12px rgba(74,222,128,.9)}
+  .badge{display:inline-block;font-size:10.5px;color:#06251b;background:var(--mint2);padding:1px 8px;border-radius:20px;margin-left:8px}
+</style>
+</head>
+<body>
+  <h1>灵岛 LingDao · 「有新版本」提示位置原型</h1>
+  <div class="sub">三个候选位置 + 更新弹窗。当前版本 <b>v0.1.0</b>，模拟发现 <b>v0.2.0</b>。推荐 <b>方案 A＋方案 C</b> 组合。</div>
+
+  <!-- 方案 A -->
+  <div class="artboard">
+    <div class="cap"><b>方案 A · 展开面板顶部细横幅（推荐）</b> — 只在有更新时出现，不挡歌词，一眼能看到</div>
+    <div class="panel">
+      <div class="rail">
+        <button class="ritem active"><span class="g">♪</span><span>音乐</span></button>
+        <button class="ritem"><span class="g">☀</span><span>天气</span></button>
+        <button class="ritem"><span class="g">▦</span><span>日历</span></button>
+      </div>
+      <div class="content">
+        <div class="topline"><span style="font-size:11px;color:#6c737f">正在播放</span>
+          <span class="gear">⚙</span>
+        </div>
+        <div class="ubanner">
+          <span class="pill">NEW</span>
+          <span class="t">灵岛 <em>v0.2.0</em> 已发布 · 修好了歌词同步和更新自愈</span>
+          <span class="acts">
+            <button class="ubtn">查看更新</button>
+            <span class="x">✕</span>
+          </span>
+        </div>
+        <div class="music">
+          <div class="disc"><div class="cover"></div></div>
+          <div class="meta">
+            <div class="title">晴天</div>
+            <div class="sub2">周杰伦 · 叶惠美</div>
+            <div class="bar"><div class="fill"></div></div>
+            <div class="times"><span>1:48</span><span>4:29</span></div>
+            <div class="lyrs">
+              <div>故事的小黄花</div>
+              <div>从出生那年就飘着</div>
+              <div class="on">童年的荡秋千 随记忆一直晃到现在</div>
+              <div>Re So So Si Do Si La</div>
+              <div>So La Si Si Si Si La Si La So</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note"><b>优点：</b>位置固定、存在感强，用户第一眼就知道有新版本；横幅里直接给「查看更新」，点开才是下载确认，不会误触升级。高度 34px，只在有更新时挤压一点内容，没有更新时完全没有它。<b>齿轮上的小绿点</b>作为一个不打扰的二次提醒。</div>
+  </div>
+
+  <!-- 方案 B -->
+  <div class="artboard">
+    <div class="cap"><b>方案 B · 右上角悬浮卡片</b> — 不改变布局，像通知一样浮上来</div>
+    <div class="panel">
+      <div class="rail">
+        <button class="ritem active"><span class="g">♪</span><span>音乐</span></button>
+        <button class="ritem"><span class="g">☀</span><span>天气</span></button>
+        <button class="ritem"><span class="g">▦</span><span>日历</span></button>
+      </div>
+      <div class="content">
+        <div class="topline"><span style="font-size:11px;color:#6c737f">正在播放</span>
+          <span class="gear">⚙<span class="dot"></span></span>
+        </div>
+        <div class="music">
+          <div class="disc"><div class="cover"></div></div>
+          <div class="meta">
+            <div class="title">晴天</div>
+            <div class="sub2">周杰伦 · 叶惠美</div>
+            <div class="bar"><div class="fill"></div></div>
+            <div class="times"><span>1:48</span><span>4:29</span></div>
+            <div class="lyrs">
+              <div>故事的小黄花</div>
+              <div class="on">从出生那年就飘着</div>
+              <div>童年的荡秋千 随记忆一直晃到现在</div>
+            </div>
+          </div>
+        </div>
+        <div class="ucard">
+          <div class="hd"><span class="ic">↑</span><span class="tt">发现新版本</span><span class="x">✕</span></div>
+          <div class="ver">当前 v0.1.0 → <b>v0.2.0</b></div>
+          <div class="notes">· 歌词逐字对齐更准<br>· 汽水更新后自动修复<br>· 修复托盘下进度停住</div>
+          <div class="acts"><button class="ubtn ghost">稍后</button><button class="ubtn">立即更新</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="note"><b>优点：</b>完全不压布局，像一次性通知；卡片可关闭，不打扰。<b>缺点：</b>卡片会暂时盖住右上角内容，且用户收起面板后就看不到了。</div>
+  </div>
+
+  <!-- 方案 C -->
+  <div class="artboard">
+    <div class="cap"><b>方案 C · 设置页「通用 → 软件更新」+ 齿轮红点（推荐作为常驻入口）</b></div>
+    <div class="setpanel">
+      <div class="p-head">
+        <div class="logo"><i></i></div>
+        <div class="p-title"><span class="name">灵岛 LingDao</span><span class="ver">v0.1.0 · 桌面灵动岛</span></div>
+        <div style="margin-left:auto;color:#6c737f">✕</div>
+      </div>
+      <div class="p-body">
+        <div>
+          <div class="grp-t">行为</div>
+          <div class="card">
+            <div class="srow"><div class="info"><div class="t">收起延时</div><div class="d">鼠标移开后多久自动收起</div></div><div class="right" style="color:#9aa1ad;font-size:12px">200 ms</div></div>
+            <div class="srow"><div class="info"><div class="t">展开态显示日期</div><div class="d">显示 年月日 + 星期</div></div><div class="right"><div class="switch" style="width:36px;height:20px;border-radius:12px;background:#2c2f38;position:relative"><span style="position:absolute;left:3px;top:3px;width:14px;height:14px;border-radius:50%;background:#8b93a1;display:block"></span></div></div></div>
+          </div>
+        </div>
+        <div>
+          <div class="grp-t">通用</div>
+          <div class="card">
+            <div class="srow">
+              <div class="info"><div class="t">软件更新</div><div class="d">当前 v0.1.0 · 自动检查更新</div></div>
+              <div class="right"><span class="tag">v0.2.0 可更新</span><button class="mini-btn mint">更新</button></div>
+            </div>
+            <div class="srow">
+              <div class="info"><div class="t">开机自启</div><div class="d">登录 Windows 后自动运行</div></div>
+              <div class="right"><span class="tag gray">已开启</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note"><b>作用：</b>即使横幅被关掉/错过，用户随时能在设置里找到「软件更新」，看到当前版本、检查/更新按钮；齿轮上的小绿点负责把用户引到这里。这是「安静但不丢失」的兜底入口。</div>
+  </div>
+
+  <!-- 弹窗流程 -->
+  <div class="artboard">
+    <div class="cap"><b>点击更新后的流程（下载 → 安装 → 自动重启）</b></div>
+    <div class="panel">
+      <div class="rail">
+        <button class="ritem active"><span class="g">♪</span><span>音乐</span></button>
+        <button class="ritem"><span class="g">☀</span><span>天气</span></button>
+      </div>
+      <div class="content">
+        <div class="topline"><span style="font-size:11px;color:#6c737f">正在播放</span><span class="gear">⚙</span></div>
+        <div class="music">
+          <div class="disc"><div class="cover"></div></div>
+          <div class="meta"><div class="title">晴天</div><div class="sub2">周杰伦 · 叶惠美</div>
+            <div class="bar"><div class="fill"></div></div><div class="times"><span>1:48</span><span>4:29</span></div>
+            <div class="lyrs"><div>故事的小黄花</div><div class="on">从出生那年就飘着</div><div>童年的荡秋千 随记忆一直晃到现在</div></div>
+          </div>
+        </div>
+        <div class="overlay">
+          <div class="dialog">
+            <h3>正在更新灵岛 v0.2.0</h3>
+            <p>下载完成后会自动安装并重启，灵动岛会恢复到你原来的位置。播放不受影响。</p>
+            <div class="dl"><i></i></div>
+            <div class="dl-meta"><span>下载中… 62%</span><span>1.8 MB / 2.9 MB</span></div>
+            <div class="acts"><button class="ubtn ghost">后台继续</button><button class="ubtn">取消</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note">更新弹窗里明确写「自动安装并重启」；给「后台继续 / 取消」两个出口。下载与校验（SHA256）在后台线程，不阻塞 UI；准备好后再提示「重启并更新」，避免下载到一半被迫退出。</div>
+  </div>
+
+  <!-- 收起态 -->
+  <div class="artboard">
+    <div class="cap"><b>收起态（可选）· 胶囊右端一个小绿点</b></div>
+    <div class="collapsed">
+      <span class="cl">童年的荡秋千 随记忆一直晃到现在</span>
+      <span class="tm">14:32</span>
+      <span class="udot"></span>
+    </div>
+    <div class="note">收起时只放一个 9px 的薄荷绿小点，不占空间、不闪动。鼠标悬停展开后由方案 A 的横幅接管。是否要这个点可再定。</div>
+  </div>
+</body>
+</html>

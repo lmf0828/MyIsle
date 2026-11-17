@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>灵岛 LingDao · 展开态导航 + 设置 原型</title>
+<style>
+  :root{
+    --bg:#1c1c22;
+    --card:#1e2027;
+    --card2:#23262e;
+    --line:#2a2d36;
+    --line-soft:#22242b;
+    --text:#e9eaee;
+    --muted:#9aa1b0;
+    --muted2:#6b7180;
+    --accent:#34d399;
+    --accent-strong:#10b981;
+    --rail:#16171c;
+    --danger:#f47272;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0}
+  body{
+    font-family:"Microsoft YaHei UI","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+    background:
+      radial-gradient(1200px 700px at 20% 0%, #2a2f3a 0%, #191a20 45%, #101116 100%);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:22px;color:var(--text);overflow:hidden;
+  }
+  .caption{font-size:14px;color:#8b93a6;letter-spacing:.05em}
+  .caption b{color:#c7cbd6;font-weight:600}
+
+  /* ===== 岛体（展开态 520x300 @2x） ===== */
+  .island{
+    position:relative;width:1040px;height:600px;border-radius:32px;
+    background:var(--bg);
+    box-shadow:0 30px 80px rgba(0,0,0,.55), 0 2px 0 rgba(255,255,255,.03) inset, 0 0 0 1px rgba(255,255,255,.04);
+    display:flex;overflow:hidden;
+  }
+
+  /* ===== 左侧菜单栏 ===== */
+  .rail{
+    width:108px;flex:0 0 108px;height:100%;
+    background:linear-gradient(180deg, #18191f 0%, #141519 100%);
+    border-right:1px solid var(--line);
+    display:flex;flex-direction:column;align-items:center;
+    padding:16px 0 16px;
+    gap:10px;
+  }
+  .brand{width:34px;height:34px;border-radius:11px;background:rgba(52,211,153,.14);
+    display:grid;place-items:center;margin-bottom:10px;box-shadow:0 0 0 1px rgba(52,211,153,.22) inset}
+  .brand svg{width:20px;height:20px;stroke:var(--accent);fill:none;stroke-width:2}
+  .nav-item{
+    width:84px;height:66px;border-radius:16px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:5px;cursor:pointer;color:var(--muted);
+    transition:background .18s,color .18s,transform .12s;position:relative;user-select:none;
+  }
+  .nav-item svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .nav-item span{font-size:12px;letter-spacing:.02em}
+  .nav-item:hover{background:rgba(255,255,255,.05);color:#cfd3dd}
+  .nav-item:active{transform:scale(.96)}
+  .nav-item.active{background:rgba(52,211,153,.13);color:var(--accent)}
+  .nav-item.active::before{content:"";position:absolute;left:-16px;top:16px;bottom:16px;width:3px;border-radius:0 3px 3px 0;background:var(--accent)}
+  .nav-item.soon{opacity:.55}
+  .rail-spacer{flex:1}
+  .rail-hint{font-size:10px;color:var(--muted2);text-align:center;line-height:1.5;padding:0 8px}
+
+  /* ===== 右侧内容区（页面堆栈） ===== */
+  .content{position:relative;flex:1;height:100%;overflow:hidden}
+
+  .page{position:absolute;inset:0;background:var(--bg);will-change:transform,opacity}
+  /* 页面进入动画：从右侧滑入，带来“层层覆盖”的感觉 */
+  .page.layer{transform:translateX(6%);opacity:0;pointer-events:none;transition:transform .26s cubic-bezier(.22,.61,.36,1),opacity .26s ease;z-index:10}
+  .page.layer.in{transform:translateX(0);opacity:1;pointer-events:auto}
+
+  /* ===== 音乐底页 ===== */
+  .music-page{display:block}
+  .disc-wrap{position:absolute;left:24px;top:12px;width:300px;height:300px}
+  .disc{position:absolute;inset:0;border-radius:50%;
+    background:radial-gradient(circle at 50% 50%, #3a3e48 0 68%, #363a44 68% 71%, #33363f 71% 100%);
+    box-shadow:0 0 0 2px rgba(0,0,0,.25) inset}
+  .vinyl{position:absolute;inset:14px;border-radius:50%;
+    background:radial-gradient(circle at 50% 50%, #12131a 0 66%, #12131a 66%, #0f1016 100%);}
+  .grooves{position:absolute;inset:22px;border-radius:50%;
+    background:repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,.055) 0 1px, transparent 1px 9px);}
+  .cover{position:absolute;left:50%;top:50%;width:156px;height:156px;transform:translate(-50%,-50%);
+    border-radius:50%;overflow:hidden;
+    background:conic-gradient(from 210deg, #2f6b57, #3c8f6f 25%, #6fbf98 45%, #2c5f6b 70%, #2f6b57 100%);
+    display:grid;place-items:center;box-shadow:0 0 0 1px rgba(0,0,0,.4);
+    animation:spin 14s linear infinite}
+  @keyframes spin{to{transform:translate(-50%,-50%) rotate(360deg)}}
+  .cover .note{font-size:64px;color:rgba(255,255,255,.9);transform:rotate(8deg);text-shadow:0 2px 10px rgba(0,0,0,.35)}
+  .spindle{position:absolute;left:50%;top:50%;width:12px;height:12px;transform:translate(-50%,-50%);border-radius:50%;
+    background:#0b0e13;box-shadow:0 0 0 2px rgba(255,255,255,.08) inset}
+  .arm{position:absolute;left:0;top:0;transform-origin:82% 11%;transform:rotate(-22deg);transition:transform .4s ease}
+  .arm .arm-line{position:absolute;left:150px;top:16px;width:150px;height:5px;border-radius:3px;background:linear-gradient(90deg,#c9ccd4,#8f939d);transform:rotate(2deg);transform-origin:0 50%;box-shadow:0 1px 2px rgba(0,0,0,.4)}
+  .arm .arm-head{position:absolute;left:292px;top:10px;width:20px;height:20px;border-radius:4px;background:#b9bcc6;box-shadow:0 1px 3px rgba(0,0,0,.45)}
+  .arm .arm-base{position:absolute;left:132px;top:2px;width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#d5d8df,#7d828d);box-shadow:0 2px 6px rgba(0,0,0,.5)}
+
+  .info{position:absolute;left:360px;top:58px;right:24px}
+  .info .title{font-size:40px;font-weight:700;letter-spacing:.01em;line-height:1.1;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .info .artist{font-size:25px;color:var(--muted);margin-top:14px}
+  .progress{margin-top:26px}
+  .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
+  .bar .fill{height:100%;width:34%;border-radius:3px;background:var(--accent)}
+  .times{display:flex;justify-content:space-between;margin-top:9px;font-size:19px;color:var(--muted2)}
+  .controls{display:flex;align-items:center;gap:22px;margin-top:28px}
+  .ctrl{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;cursor:pointer;
+    background:rgba(255,255,255,.07);color:#c8d0dc;transition:background .15s,transform .1s}
+  .ctrl:hover{background:rgba(255,255,255,.14)}
+  .ctrl:active{transform:scale(.93)}
+  .ctrl svg{width:20px;height:20px;fill:currentColor}
+  .ctrl.play{width:72px;height:72px;background:var(--accent);color:#0b1712}
+  .ctrl.play:hover{background:#3ee0a6}
+  .ctrl.play svg{width:28px;height:28px}
+  .src{font-size:18px;color:var(--muted2);margin-left:auto}
+
+  .lyrics{position:absolute;left:24px;right:24px;top:356px}
+  .lyric{height:44px;line-height:44px;text-align:center;font-size:26px;color:var(--muted2);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lyric.prev{color:#5d6472}
+  .lyric.cur{color:var(--muted);font-weight:600}
+  .lyric.cur .hl{color:var(--accent)}
+  .lyric.next{color:#5d6472}
+
+  /* 齿轮按钮：右下角 */
+  .gear{position:absolute;right:22px;bottom:18px;width:52px;height:52px;border-radius:50%;
+    border:1px solid rgba(255,255,255,.10);background:rgba(30,32,39,.82);backdrop-filter:blur(6px);
+    display:grid;place-items:center;cursor:pointer;color:var(--muted);z-index:5;
+    transition:background .15s,color .18s,transform .3s}
+  .gear:hover{color:var(--text);background:rgba(52,211,153,.16);transform:rotate(45deg)}
+  .gear:active{transform:rotate(45deg) scale(.92)}
+  .gear svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.9}
+
+  /* ===== 设置页 ===== */
+  .settings-page{display:flex;flex-direction:column}
+  .set-head{flex:0 0 auto;display:flex;align-items:center;gap:16px;padding:18px 24px 12px}
+  .back{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;cursor:pointer;
+    color:var(--muted);background:rgba(255,255,255,.05);transition:background .15s,color .15s;flex:0 0 auto}
+  .back:hover{background:rgba(255,255,255,.12);color:var(--text)}
+  .back svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .set-title{font-size:30px;font-weight:700}
+  .set-sub{font-size:18px;color:var(--muted2);margin-left:2px}
+  .set-body{flex:1;overflow-y:auto;padding:6px 24px 26px}
+  .set-body::-webkit-scrollbar{width:8px}
+  .set-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:4px}
+  .section-label{font-size:16px;color:var(--muted2);letter-spacing:.12em;margin:16px 4px 10px}
+  .card{background:var(--card2);border:1px solid var(--line-soft);border-radius:18px;overflow:hidden}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:16px 20px;min-height:70px}
+  .row + .row{border-top:1px solid var(--line-soft)}
+  .row .label{font-size:23px;color:var(--text);line-height:1.25}
+  .row .desc{font-size:16px;color:var(--muted2);margin-top:5px;line-height:1.3;max-width:520px}
+  .row .ctl{display:flex;align-items:center;gap:12px;flex:0 0 auto}
+  .val{font-size:19px;color:var(--muted);min-width:74px;text-align:right;font-variant-numeric:tabular-nums}
+
+  /* toggle */
+  .switch{position:relative;display:inline-block;width:54px;height:32px;flex:0 0 auto}
+  .switch input{opacity:0;width:0;height:0;position:absolute}
+  .track{position:absolute;inset:0;border-radius:16px;background:rgba(255,255,255,.16);transition:background .2s;cursor:pointer}
+  .track::after{content:"";position:absolute;left:3px;top:3px;width:26px;height:26px;border-radius:50%;background:#cfd3dc;transition:transform .2s,background .2s}
+  .switch input:checked + .track{background:var(--accent)}
+  .switch input:checked + .track::after{transform:translateX(22px);background:#0b1712}
+
+  input[type=range]{width:210px;accent-color:var(--accent);height:6px;cursor:pointer}
+  input[type=range]:disabled{opacity:.35;cursor:not-allowed}
+
+  .footnote{font-size:15px;color:var(--muted2);text-align:center;padding:18px 0 4px}
+
+  /* 占位模块页 */
+  .placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;color:var(--muted)}
+  .placeholder .big{width:96px;height:96px;border-radius:26px;background:rgba(255,255,255,.05);display:grid;place-items:center}
+  .placeholder .big svg{width:46px;height:46px;stroke:currentColor;fill:none;stroke-width:1.6}
+  .placeholder h2{font-size:26px;color:#c7cbd6;margin:0;font-weight:600}
+  .placeholder p{font-size:17px;color:var(--muted2);margin:0}
+  .placeholder .ph-back{position:absolute;left:24px;top:20px}
+</style>
+</head>
+<body>
+  <div class="caption">灵岛 LingDao · 展开态 <b>左侧菜单 + 设置页原型</b></div>
+
+  <div class="island">
+    <!-- 左侧菜单栏 -->
+    <nav class="rail">
+      <div class="brand" title="灵岛">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>
+      </div>
+      <div class="nav-item active" data-nav="music" title="音乐">
+        <svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>
+        <span>音乐</span>
+      </div>
+      <div class="nav-item soon" data-nav="schedule" title="日程（即将上线）">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>
+        <span>日程</span>
+      </div>
+      <div class="nav-item soon" data-nav="weather" title="天气（即将上线）">
+        <svg viewBox="0 0 24 24"><path d="M7 18h9a4 4 0 0 0 .5-7.97A5.5 5.5 0 0 0 6 9.5 3.5 3.5 0 0 0 7 18z"/></svg>
+        <span>天气</span>
+      </div>
+      <div class="rail-spacer"></div>
+      <div class="rail-hint">更多模块<br>即将加入</div>
+    </nav>
+
+    <!-- 右侧内容区 -->
+    <div class="content">
+      <!-- 底页：音乐播放 -->
+      <section class="page music-page" data-page="music">
+        <div class="disc-wrap">
+          <div class="disc"></div>
+          <div class="vinyl"></div>
+          <div class="grooves"></div>
+          <div class="cover"><span class="note">♪</span></div>
+          <div class="spindle"></div>
+          <div class="arm">
+            <div class="arm-base"></div>
+            <div class="arm-line"></div>
+            <div class="arm-head"></div>
+          </div>
+        </div>
+
+        <div class="info">
+          <div class="title">夜空中最亮的星</div>
+          <div class="artist">逃跑计划</div>
+          <div class="progress">
+            <div class="bar"><div class="fill"></div></div>
+            <div class="times"><span>1:23</span><span>4:06</span></div>
+          </div>
+          <div class="controls">
+            <div class="ctrl" title="上一首"><svg viewBox="0 0 24 24"><path d="M7 6h2v12H7zM19 6v12l-9-6z"/></svg></div>
+            <div class="ctrl play" title="暂停"><svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></div>
+            <div class="ctrl" title="下一首"><svg viewBox="0 0 24 24"><path d="M15 6h2v12h-2zM5 6v12l9-6z"/></svg></div>
+            <span class="src">网易云音乐</span>
+          </div>
+        </div>
+
+        <div class="lyrics">
+          <div class="lyric prev">我祈祷拥有一颗透明的心灵</div>
+          <div class="lyric prev">和会流泪的眼睛</div>
+          <div class="lyric cur"><span class="hl">那仰</span>望的人</div>
+          <div class="lyric next">请指引我靠近你</div>
+          <div class="lyric next">夜空中最亮的星</div>
+        </div>
+
+        <!-- 右下角齿轮 -->
+        <button class="gear" id="gearBtn" title="音乐设置">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2-1.5-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3H12l-.3 2.6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.5a7.7 7.7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1L12 21h3l.3-2.6a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z"/></svg>
+        </button>
+      </section>
+
+      <!-- 设置页（覆盖右侧内容） -->
+      <section class="page layer settings-page" data-page="settings">
+        <div class="set-head">
+          <div class="back" data-close title="返回"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></div>
+          <div>
+            <span class="set-title">设置</span>
+            <span class="set-sub">· 音乐</span>
+          </div>
+        </div>
+        <div class="set-body">
+          <div class="section-label">歌词</div>
+          <div class="card">
+            <div class="row">
+              <div>
+                <div class="label">换行滚动动画</div>
+                <div class="desc">歌词换行时，上一句向上滚出淡出、下一句从下方滚入</div>
+              </div>
+              <div class="ctl">
+                <label class="switch"><input type="checkbox" id="rollToggle" checked><span class="track"></span></label>
+              </div>
+            </div>
+            <div class="row">
+              <div class="label">滚动时长</div>
+              <div class="ctl">
+                <input type="range" id="rollDur" min="200" max="800" step="20" value="340">
+                <span class="val" id="rollDurVal">340 ms</span>
+              </div>
+            </div>
+            <div class="row">
+              <div class="label">逐字渐绿</div>
+              <div class="ctl">
+                <label class="switch"><input type="checkbox" checked><span class="track"></span></label>
+              </div>
+            </div>
+            <div class="row">
+              <div>
+                <div class="label">超长歌词跑马灯</div>
+                <div class="desc">收起态单行放不下时横向滚动（只滚一遍）</div>
+              </div>
+              <div class="ctl">
+                <label class="switch"><input type="checkbox" checked><span class="track"></span></label>
+              </div>
+            </div>
+            <div class="row">
+              <div class="label">歌词时间校准</div>
+              <div class="ctl">
+                <input type="range" id="shift" min="-1000" max="1000" step="50" value="-300">
+                <span class="val" id="shiftVal">-300 ms</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="section-label">显示</div>
+          <div class="card">
+            <div class="row">
+              <div class="label">歌词字号</div>
+              <div class="ctl">
+                <input type="range" id="lyrFont" min="11" max="17" step="1" value="13">
+                <span class="val" id="lyrFontVal">13</span>
+              </div>
+            </div>
+            <div class="row">
+              <div class="label">收起态显示频谱动画</div>
+              <div class="ctl">
+                <label class="switch"><input type="checkbox" checked><span class="track"></span></label>
+              </div>
+            </div>
+          </div>
+
+          <div class="footnote">更多音乐设置将陆续加入</div>
+        </div>
+      </section>
+
+      <!-- 占位模块页：日程 -->
+      <section class="page layer placeholder" data-page="schedule">
+        <div class="back ph-back" data-close><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></div>
+        <div class="big"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg></div>
+        <h2>日程</h2>
+        <p>该模块页面即将上线 · 覆盖在音乐页之上</p>
+      </section>
+
+      <!-- 占位模块页：天气 -->
+      <section class="page layer placeholder" data-page="weather">
+        <div class="back ph-back" data-close><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></div>
+        <div class="big"><svg viewBox="0 0 24 24"><path d="M7 18h9a4 4 0 0 0 .5-7.97A5.5 5.5 0 0 0 6 9.5 3.5 3.5 0 0 0 7 18z"/></svg></div>
+        <h2>天气</h2>
+        <p>该模块页面即将上线 · 覆盖在音乐页之上</p>
+      </section>
+    </div>
+  </div>
+
+  <div class="caption">点右下角 <b>齿轮</b> 打开设置 · 点左侧图标切换模块 · 关闭后始终回到音乐页</div>
+
+<script>
+  const stack = []; // 当前覆盖在音乐底页之上的页面 id 栈
+  const pages = {};
+  document.querySelectorAll('.page.layer').forEach(el => { pages[el.dataset.page] = el; });
+
+  function render(){
+    Object.values(pages).forEach(el => el.classList.remove('in'));
+    stack.forEach(id => { if(pages[id]) pages[id].classList.add('in'); });
+    // 左侧高亮：栈底若不是音乐页（即某个模块页），高亮对应模块；设置页不影响模块高亮
+    const baseModule = stack.find(id => id === 'schedule' || id === 'weather') || 'music';
+    document.querySelectorAll('.nav-item').forEach(n => {
+      n.classList.toggle('active', n.dataset.nav === baseModule);
+    });
+  }
+  function push(id){
+    // 从音乐页点其他模块 → 清空后压入该模块页；设置追加在栈顶
+    if(id === 'music'){ stack.length = 0; }
+    else {
+      // 若已存在同页则不重复
+      const i = stack.indexOf(id);
+      if(i >= 0) stack.length = i + 1; else stack.push(id);
+    }
+    render();
+  }
+  function pop(){
+    stack.pop();
+    render();
+  }
+
+  document.getElementById('gearBtn').addEventListener('click', () => push('settings'));
+  document.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', pop));
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.addEventListener('click', () => push(el.dataset.nav));
+  });
+
+  // 设置项联动
+  const rollToggle = document.getElementById('rollToggle');
+  const rollDur = document.getElementById('rollDur');
+  const rollDurVal = document.getElementById('rollDurVal');
+  function syncRoll(){
+    rollDur.disabled = !rollToggle.checked;
+    rollDur.style.opacity = rollToggle.checked ? 1 : .35;
+  }
+  rollToggle.addEventListener('change', syncRoll);
+  rollDur.addEventListener('input', () => rollDurVal.textContent = rollDur.value + ' ms');
+  const shift = document.getElementById('shift');
+  const shiftVal = document.getElementById('shiftVal');
+  shift.addEventListener('input', () => shiftVal.textContent = shift.value + ' ms');
+  const lyrFont = document.getElementById('lyrFont');
+  const lyrFontVal = document.getElementById('lyrFontVal');
+  lyrFont.addEventListener('input', () => lyrFontVal.textContent = lyrFont.value);
+  syncRoll();
+
+  // 支持 ?open=settings / schedule / weather 便于截图
+  const q = new URLSearchParams(location.search).get('open');
+  if(q && pages[q]) stack.push(q);
+  render();
+</script>
+</body>
+</html>

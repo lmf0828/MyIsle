@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>灵岛 LingDao · 音乐模块 · 原型 v3</title>
+<style>
+  :root{
+    --bg:#0b0e13; --ink:#e9edf3; --muted:#9aa4b2; --muted2:#6f7a89;
+    --card:#1b2129; --line:rgba(255,255,255,.07);
+    --accent:#2fd6a6; --accent2:#39c7ff; --radius:22px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,#17202b 0%,#0b0e13 55%),#0b0e13;color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+  header{padding:32px 40px 8px}
+  header h1{margin:0;font-size:22px;font-weight:700;letter-spacing:.5px}
+  header h1 b{color:var(--accent)}
+  header p{margin:8px 0 0;color:var(--muted);font-size:13.5px;line-height:1.6;max-width:980px}
+  .toolbar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;padding:16px 40px 4px}
+  .chip{border:1px solid var(--line);background:#141a22;color:var(--muted);font-size:13px;padding:7px 14px;border-radius:999px;cursor:pointer;transition:.18s;user-select:none}
+  .chip:hover{color:var(--ink);border-color:rgba(255,255,255,.16)}
+  .chip.on{background:linear-gradient(180deg,rgba(47,214,166,.18),rgba(47,214,166,.08));color:#bff6e6;border-color:rgba(47,214,166,.5)}
+  .tip{margin-left:auto;color:var(--muted2);font-size:12.5px}
+  main{padding:8px 40px 26px;display:flex;flex-direction:column;gap:20px}
+  .block{background:linear-gradient(180deg,#10151c,#0d1218);border:1px solid var(--line);border-radius:20px;padding:16px 18px 20px;overflow:hidden}
+  .label{font-size:13px;color:var(--muted);margin:2px 0 12px}
+  .label b{color:#cfe8ff;font-weight:600}
+  .desktop{position:relative;border-radius:16px;overflow:hidden;
+    background:
+      radial-gradient(600px 220px at 50% -40%, rgba(57,199,255,.18), transparent 60%),
+      radial-gradient(600px 260px at 85% 120%, rgba(47,214,166,.12), transparent 60%),
+      linear-gradient(180deg,#141a24,#0c1016);
+    border:1px solid rgba(255,255,255,.05);
+    display:flex;justify-content:center;align-items:flex-start}
+  .desktop.c{height:150px}
+  .desktop.tall{height:auto;min-height:380px;padding:26px 0 34px}
+  .desktop::after{content:"模拟桌面背景";position:absolute;right:12px;bottom:8px;font-size:11px;color:rgba(255,255,255,.18)}
+
+  /* ===== 收起态：显示当前歌词 ===== */
+  .pill{display:inline-flex;align-items:center;gap:10px;height:34px;max-width:322px;width:max-content;
+    padding:0 12px;border-radius:0 0 17px 17px;background:linear-gradient(180deg,#20262f,#171c24);
+    border:1px solid rgba(255,255,255,.08);border-top:0;
+    box-shadow:0 8px 24px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+    justify-content:center;overflow:hidden;color:#eef3f9;font-size:13px}
+  .pill.idle{max-width:170px}
+  .marquee{overflow:hidden;white-space:nowrap;max-width:236px;flex:0 1 auto;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 10px,#000 calc(100% - 10px),transparent)}
+  .mrun{display:inline-flex;white-space:nowrap}
+  .mrun.long{animation:scrollx 10s linear infinite}
+  .mrun span{padding-right:28px}
+  @keyframes scrollx{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+  .eq{display:inline-flex;align-items:flex-end;gap:2px;height:13px;flex:0 0 auto}
+  .eq i{width:2.5px;background:var(--accent);border-radius:2px;animation:eq 1s ease-in-out infinite}
+  .eq i:nth-child(2){animation-delay:.25s}
+  .eq i:nth-child(3){animation-delay:.5s}
+  @keyframes eq{0%,100%{height:4px}50%{height:13px}}
+  .clock{font-variant-numeric:tabular-nums;font-weight:600;color:#dfe6ef;flex:0 0 auto;letter-spacing:.3px}
+  .pill.idle .eq{display:none}
+  .pill.idle .marquee{max-width:120px}
+  .pill.idle .clock{font-size:15px}
+
+  /* ===== 展开态：左菜单 + 右内容 ===== */
+  .panel{width:500px;max-width:95%;border-radius:var(--radius);background:linear-gradient(180deg,rgba(30,36,45,.97),rgba(22,27,34,.99));
+    border:1px solid rgba(255,255,255,.08);box-shadow:0 24px 60px rgba(0,0,0,.6);
+    display:flex;overflow:hidden}
+  .rail{width:66px;flex:0 0 66px;padding:12px 0;display:flex;flex-direction:column;align-items:center;gap:8px;
+    background:rgba(0,0,0,.22);border-right:1px solid var(--line)}
+  .ritem{width:48px;border:0;background:transparent;color:var(--muted2);cursor:pointer;border-radius:12px;padding:8px 0 6px;
+    display:flex;flex-direction:column;align-items:center;gap:3px;transition:.15s}
+  .ritem .rg{font-size:17px;line-height:1}
+  .ritem .rl{font-size:10.5px;letter-spacing:.3px}
+  .ritem:hover{color:var(--ink);background:rgba(255,255,255,.04)}
+  .ritem.active{color:#062a20;background:linear-gradient(180deg,#2fd6a6,#23c295);box-shadow:0 6px 14px rgba(47,214,166,.3)}
+  .content{flex:1 1 auto;min-width:0;padding:16px 16px 14px}
+  .pane{display:none}
+  .pane.on{display:block}
+
+  /* 音乐头：圆形唱片 + 信息 */
+  .music-head{display:flex;gap:15px;align-items:center}
+  .disc-wrap{position:relative;width:92px;height:92px;flex:0 0 92px}
+  .disc{position:absolute;inset:0;border-radius:50%;
+    background:repeating-radial-gradient(circle at 50% 50%, #181d24 0 1.4px, #232a33 1.4px 2.9px);
+    box-shadow:0 10px 24px rgba(0,0,0,.55), inset 0 0 0 2px rgba(255,255,255,.05);
+    animation:spin 7s linear infinite}
+  .disc::before{content:"";position:absolute;inset:0;border-radius:50%;
+    background:radial-gradient(circle at 70% 26%, rgba(255,255,255,.30), transparent 30%)}
+  .disc .label{position:absolute;inset:30px;border-radius:50%;
+    background:linear-gradient(135deg,#39c7ff,#2fd6a6);display:flex;align-items:center;justify-content:center;
+    color:rgba(6,35,28,.85);font-size:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.3)}
+  .disc .hole{position:absolute;left:50%;top:50%;width:9px;height:9px;border-radius:50%;background:#0c1015;
+    transform:translate(-50%,-50%);box-shadow:0 0 0 2px rgba(0,0,0,.5)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .disc-wrap.paused .disc{animation-play-state:paused;filter:grayscale(.6) brightness(.8)}
+  .meta{flex:1 1 auto;min-width:0}
+  .title{font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub{font-size:12px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .progress{margin-top:11px}
+  .bar{position:relative;height:5px;border-radius:99px;background:rgba(255,255,255,.12)}
+  .fill{position:absolute;left:0;top:0;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent2),var(--accent))}
+  .knob{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.5)}
+  .times{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted2);margin-top:5px;font-variant-numeric:tabular-nums}
+  .controls{display:flex;align-items:center;gap:11px;margin-top:10px}
+  .ctl{width:32px;height:32px;border-radius:50%;border:1px solid var(--line);background:#1a2028;color:#cfd7e2;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s}
+  .ctl:hover{background:#222a34;color:#fff}
+  .ctl.play{width:40px;height:40px;background:linear-gradient(180deg,#2fd6a6,#22c295);color:#052a20;border:0;font-size:15px;box-shadow:0 6px 16px rgba(47,214,166,.35)}
+  .src{margin-left:auto;font-size:11.5px;color:var(--muted)}
+
+  /* 五行歌词 */
+  .lyrics{margin-top:16px;min-height:132px;display:flex;flex-direction:column;gap:9px;justify-content:center;text-align:center;
+    -webkit-mask-image:linear-gradient(180deg,transparent,#000 16%,#000 84%,transparent)}
+  .ln{font-size:13px;color:#59626f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:.2s}
+  .ln.prev{color:#4c545f}
+  .ln.next{color:#6c7683}
+  .ln.cur{font-size:16px;font-weight:700;color:var(--accent);filter:drop-shadow(0 0 12px rgba(47,214,166,.28))}
+  .lyrics.idle .ln{color:#4c545f}
+
+  .ph{padding:14px;border-radius:12px;background:rgba(255,255,255,.025);border:1px dashed rgba(255,255,255,.14);
+    color:var(--muted);font-size:12.5px;display:flex;align-items:center;gap:10px}
+  .ph .pi{width:34px;height:34px;border-radius:9px;background:#1a212b;display:flex;align-items:center;justify-content:center;font-size:16px}
+  .note{font-size:12px;color:var(--muted2);padding:0 40px 26px}
+  kbd{background:#1a212b;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:11px;color:#c3ccd8}
+</style>
+</head>
+<body>
+<header>
+  <h1>灵岛 <b>LingDao</b> · 音乐模块 · 原型 v3</h1>
+  <p>收起态：贴顶刘海胶囊，滚动显示当前唱到的那句歌词（无图标）。展开态：左「菜单区」+ 右「内容区」；音乐内容显示<b>上两句 / 当前句 / 下两句共五行歌词</b>，封面用<b>圆形唱片旋转</b>呈现。点上方按钮切状态，点左侧图标切模块。</p>
+</header>
+
+<div class="toolbar">
+  <div class="chip on" data-state="play">有播放</div>
+  <div class="chip" data-state="noplay">未在播放</div>
+  <div class="chip" data-state="long">长歌词(跑马灯)</div>
+  <div class="chip" data-state="lyric">歌词滚动</div>
+  <div class="tip">收起态显示当前歌词 · 展开态五行歌词 + 唱片旋转</div>
+</div>
+
+<main>
+  <section class="block">
+    <div class="label"><b>① 收起态</b> · 贴顶刘海胶囊（滚动显示当前歌词，最宽约 322）</div>
+    <div class="desktop c">
+      <div class="pill" id="pill">
+        <div class="marquee" id="miniMarquee"><div class="mrun" id="miniRun"><span id="miniLyric">故事的小黄花，从出生那年就飘着</span></div></div>
+        <div class="eq"><i></i><i></i><i></i></div>
+        <div class="clock" id="miniClock">14:32</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="label"><b>② 展开态</b> · 左「菜单区」切换模块 + 右「内容区」（音乐：唱片 + 五行歌词）</div>
+    <div class="desktop tall">
+      <div class="panel">
+        <div class="rail" id="rail">
+          <button class="ritem active" data-mod="music"><span class="rg">♪</span><span class="rl">音乐</span></button>
+          <button class="ritem" data-mod="weather"><span class="rg">☀</span><span class="rl">天气</span></button>
+          <button class="ritem" data-mod="cal"><span class="rg">▦</span><span class="rl">日历</span></button>
+          <button class="ritem" data-mod="unread"><span class="rg">✉</span><span class="rl">未读</span></button>
+        </div>
+        <div class="content">
+          <div class="pane on" id="pane-music">
+            <div class="music-head">
+              <div class="disc-wrap" id="discWrap">
+                <div class="disc"><div class="label">♪</div><div class="hole"></div></div>
+              </div>
+              <div class="meta">
+                <div class="title" id="bigTitle">晴天</div>
+                <div class="sub" id="bigSub">周杰伦 · 叶惠美</div>
+                <div class="progress">
+                  <div class="bar"><div class="fill" id="fill" style="width:27%"></div><div class="knob" id="knob" style="left:27%"></div></div>
+                  <div class="times"><span id="tCur">1:12</span><span id="tTot">4:29</span></div>
+                </div>
+                <div class="controls">
+                  <button class="ctl">⏮</button>
+                  <button class="ctl play" id="playBtn">⏸</button>
+                  <button class="ctl">⏭</button>
+                  <div class="src">♪ 汽水音乐</div>
+                </div>
+              </div>
+            </div>
+            <div class="lyrics" id="lyrics"></div>
+          </div>
+          <div class="pane" id="pane-weather">
+            <div class="ph"><div class="pi">☀</div><div>天气模块（占位）· 22° 多云，最高 26° / 最低 18°</div></div>
+          </div>
+          <div class="pane" id="pane-cal">
+            <div class="ph"><div class="pi">▦</div><div>日历模块（占位）· 今天 3 个日程</div></div>
+          </div>
+          <div class="pane" id="pane-unread">
+            <div class="ph"><div class="pi">✉</div><div>未读消息模块（占位）· 微信 2 · QQ 0</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="note">尺寸参考：收起胶囊高 34、最大宽 ~322（歌词超出即跑马灯）；展开面板 500 宽（左菜单 66 + 右内容），唱片 Ø92，五行歌词区高 ~132，面板高度随模块内容自适应。 点左侧图标切模块，右上角 ✕ 关闭 → 询问隐藏/退出（沿用现有）。</div>
+
+<script>
+const S = {
+  play:  { clock:'14:32', title:'晴天', sub:'周杰伦 · 叶惠美', cur:2, long:false, empty:false,
+           lines:['从前从前 有个人爱你很久','但偏偏 风渐渐 把距离吹得好远','故事的小黄花 从出生那年就飘着','为你翘课的那一天 花落的那一天','消失的下雨天 我好想再淋一遍'],
+           fill:'27%', tcur:'1:12', ttot:'4:29', pb:'⏸' },
+  noplay:{ clock:'14:32', title:'未在播放', sub:'打开汽水音乐播放一首试试', cur:2, long:false, empty:true,
+           lines:['','','未在播放','',''],
+           fill:'0%', tcur:'0:00', ttot:'0:00', pb:'▶' },
+  long:  { clock:'21:08', title:'你离开的事实我总学不会', sub:'隔壁老樊 · Live 现场版', cur:2, long:true, empty:false,
+           lines:['我还在原地等你','你却已经忘记曾来过这里','我还在原地等你 你却已经忘记曾来过这里 我还在原地等你','那些说好不分离的誓言 都散在风里','如果时间可以重来 我一定好好珍惜'],
+           fill:'63%', tcur:'3:01', ttot:'4:47', pb:'⏸' },
+  lyric: { clock:'14:33', title:'晴天', sub:'周杰伦 · 叶惠美', cur:1, long:false, empty:false,
+           lines:['消失的下雨天 我好想再淋一遍','为你翘课的那一天 花落的那一天','教室的那一间 我怎么看不见','故事的小黄花 从出生那年就飘着','从前从前 有个人爱你很久'],
+           fill:'41%', tcur:'1:50', ttot:'4:29', pb:'⏸' }
+};
+function buildMarquee(text, animate){
+  const run=document.getElementById('miniRun'); run.innerHTML='';
+  const mk=t=>{const s=document.createElement('span');s.textContent=t;return s;};
+  run.appendChild(mk(text));
+  if(animate){ run.appendChild(mk(text)); run.classList.add('long'); } else run.classList.remove('long');
+}
+function renderLyrics(lines, cur, idle){
+  const box=document.getElementById('lyrics'); box.innerHTML=''; box.classList.toggle('idle', !!idle);
+  const cls=['prev','prev','cur','next','next'];
+  lines.forEach((t,i)=>{ const d=document.createElement('div'); d.className='ln '+(cls[i]||(i<cur?'prev':'next')); d.textContent=t; box.appendChild(d); });
+}
+function setState(k){
+  const s=S[k];
+  document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on', c.dataset.state===k));
+  const pill=document.getElementById('pill'); pill.classList.toggle('idle', s.empty);
+  buildMarquee(s.lines[s.cur] || '未在播放', s.long);
+  document.getElementById('miniClock').textContent=s.clock;
+
+  document.getElementById('discWrap').classList.toggle('paused', s.empty);
+  document.getElementById('bigTitle').textContent=s.title;
+  document.getElementById('bigSub').textContent=s.sub;
+  document.getElementById('fill').style.width=s.fill;
+  document.getElementById('knob').style.left=s.fill;
+  document.getElementById('tCur').textContent=s.tcur;
+  document.getElementById('tTot').textContent=s.ttot;
+  document.getElementById('playBtn').textContent=s.pb;
+  renderLyrics(s.lines, s.cur, s.empty);
+}
+function setModule(m){
+  document.querySelectorAll('.ritem').forEach(b=>b.classList.toggle('active', b.dataset.mod===m));
+  ['music','weather','cal','unread'].forEach(x=>document.getElementById('pane-'+x).classList.toggle('on', x===m));
+}
+document.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>setState(c.dataset.state)));
+document.querySelectorAll('.ritem').forEach(b=>b.addEventListener('click',()=>setModule(b.dataset.mod)));
+const init=(location.hash||'').slice(1);
+setState(S[init]?init:'play');
+setModule('music');
+</script>
+</body>
+</html>

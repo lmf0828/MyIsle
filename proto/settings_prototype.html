@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>灵岛 LingDao · 设置面板原型</title>
+<style>
+  :root{
+    --accent:#34d399; --accent-strong:#10b981; --accent-dim:rgba(52,211,153,.14);
+    --bg:#0d0e12; --panel:#17181d; --card:#1e2027; --card-2:#23262e;
+    --line:#2a2d36; --line-soft:#22242b;
+    --text:#e9eaee; --muted:#9aa1b0; --muted-2:#6b7180;
+    --danger:#f47272; --danger-dim:rgba(244,114,114,.12);
+    --radius:16px;
+    --shadow:0 24px 60px -12px rgba(0,0,0,.65), 0 8px 24px -8px rgba(0,0,0,.5);
+    font-synthesis:none;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(1200px 600px at 20% -10%, rgba(52,211,153,.10), transparent 60%),
+      radial-gradient(1000px 600px at 100% 110%, rgba(90,120,255,.10), transparent 55%),
+      var(--bg);
+    color:var(--text);
+    font-family:"Segoe UI Variable Display","Segoe UI","Microsoft YaHei UI","PingFang SC",system-ui,-apple-system,sans-serif;
+    min-height:100vh;padding:56px 32px 80px;
+  }
+  .canvas-head{max-width:1120px;margin:0 auto 40px;}
+  .canvas-head h1{font-size:22px;font-weight:650;margin:0 0 6px;letter-spacing:.2px;}
+  .canvas-head p{margin:0;color:var(--muted);font-size:13.5px;}
+  .canvas-head .badge{display:inline-block;margin-left:10px;font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-dim);border:1px solid rgba(52,211,153,.28);padding:2px 9px;border-radius:999px;vertical-align:middle;}
+  .stage{display:flex;flex-wrap:wrap;gap:48px;justify-content:center;align-items:flex-start;}
+  .artboard{display:flex;flex-direction:column;gap:14px;}
+  .artboard > .cap{font-size:12.5px;color:var(--muted);letter-spacing:.4px;text-align:center;}
+  .artboard > .cap b{color:var(--text);font-weight:600;}
+
+  /* ============ 设置面板 ============ */
+  .panel{
+    width:440px;background:var(--panel);border:1px solid var(--line);
+    border-radius:20px;box-shadow:var(--shadow);overflow:hidden;position:relative;
+    display:flex;flex-direction:column;
+  }
+  .p-head{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line-soft);}
+  .logo{width:34px;height:34px;border-radius:11px;background:linear-gradient(145deg,#2b2e38,#191b21);
+    border:1px solid #343845;display:flex;align-items:center;justify-content:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.05);}
+  .logo .dot{width:13px;height:13px;border-radius:50%;background:radial-gradient(circle at 32% 30%,#5ef0b6,#10b981);
+    box-shadow:0 0 10px rgba(52,211,153,.75);}
+  .p-title{display:flex;flex-direction:column;line-height:1.25;}
+  .p-title .name{font-size:15px;font-weight:650;letter-spacing:.2px;}
+  .p-title .ver{font-size:11px;color:var(--muted-2);margin-top:1px;}
+  .p-title .ver em{color:var(--muted);font-style:normal;}
+  .win-dots{margin-left:auto;display:flex;gap:8px;}
+  .win-btn{width:30px;height:30px;border-radius:9px;border:1px solid transparent;background:transparent;color:var(--muted);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;transition:.15s;font-size:15px;}
+  .win-btn:hover{background:#23262e;color:var(--text);border-color:var(--line);}
+  .win-btn.close:hover{background:var(--danger-dim);color:var(--danger);border-color:rgba(244,114,114,.3);}
+
+  .p-body{padding:16px 18px 8px;display:flex;flex-direction:column;gap:18px;}
+  .p-body::-webkit-scrollbar{width:9px;}
+  .p-body::-webkit-scrollbar-thumb{background:#2c2f38;border-radius:9px;border:2px solid var(--panel);}
+
+  .grp .grp-t{font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted-2);margin:0 0 10px 2px;}
+  .card{background:var(--card);border:1px solid var(--line-soft);border-radius:var(--radius);padding:14px;}
+  .card.tight{padding:6px 4px;}
+
+  /* 位置九宫/六宫格 */
+  .posgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .pos{position:relative;background:var(--card-2);border:1.5px solid var(--line);border-radius:12px;padding:10px 8px 8px;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;gap:7px;transition:.16s;user-select:none;}
+  .pos:hover{border-color:#3a3e49;background:#282b34;}
+  .pos .scr{width:100%;height:34px;border-radius:6px;background:#141519;border:1px solid #303340;position:relative;}
+  .pos .pill{position:absolute;background:var(--accent);border-radius:3px;height:4px;width:26px;box-shadow:0 0 8px rgba(52,211,153,.6);}
+  .pos .lbl{font-size:11px;color:var(--muted);letter-spacing:.2px;}
+  .pos.sel{border-color:var(--accent);background:var(--accent-dim);box-shadow:0 0 0 1px var(--accent) inset;}
+  .pos.sel .lbl{color:var(--accent);font-weight:600;}
+  .pos.sel .pill{box-shadow:0 0 12px rgba(52,211,153,.9);}
+  .pos .check{position:absolute;top:6px;right:6px;width:15px;height:15px;border-radius:50%;background:var(--accent);display:none;align-items:center;justify-content:center;}
+  .pos.sel .check{display:flex;}
+  .pos .check svg{width:9px;height:9px;}
+
+  /* 行 */
+  .row{display:flex;align-items:center;gap:12px;padding:9px 2px;}
+  .row + .row{border-top:1px solid var(--line-soft);}
+  .row .info{flex:1;min-width:0;}
+  .row .info .t{font-size:13.5px;font-weight:520;}
+  .row .info .d{font-size:11.5px;color:var(--muted-2);margin-top:2px;}
+  .val{font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--accent);font-weight:600;min-width:44px;text-align:right;}
+
+  /* 滑块 */
+  input[type=range]{-webkit-appearance:none;appearance:none;width:150px;height:4px;border-radius:3px;background:#33363f;outline:none;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid var(--accent-strong);box-shadow:0 2px 6px rgba(0,0,0,.5);cursor:pointer;transition:.1s;}
+  input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.08);}
+
+  /* 开关 */
+  .switch{width:42px;height:24px;border-radius:999px;background:#33363f;position:relative;cursor:pointer;transition:.2s;flex:none;border:1px solid #3b3f49;}
+  .switch .knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#c9ccd4;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.5);}
+  .switch.on{background:var(--accent-strong);border-color:var(--accent-strong);}
+  .switch.on .knob{left:20px;background:#fff;}
+
+  /* 颜色 */
+  .swatch{width:30px;height:30px;border-radius:9px;border:1px solid #3a3e49;cursor:pointer;
+    background:conic-gradient(#34d399,#5a78ff,#f47272,#f0b45e,#34d399);position:relative;flex:none;}
+  .swatch::after{content:"";position:absolute;inset:6px;border-radius:5px;background:#1c1e24;border:1px solid #35394700;}
+
+  /* 分段控件 */
+  .seg{display:flex;background:var(--card-2);border:1px solid var(--line);border-radius:11px;padding:3px;gap:2px;}
+  .seg button{flex:1;border:none;background:transparent;color:var(--muted);font-size:12.5px;padding:7px 0;border-radius:8px;cursor:pointer;transition:.15s;font-family:inherit;}
+  .seg button.on{background:#2f323c;color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.4);}
+
+  .p-foot{display:flex;align-items:center;gap:10px;padding:14px 18px;border-top:1px solid var(--line-soft);background:linear-gradient(180deg,rgba(255,255,255,.01),transparent);}
+  .btn{border:1px solid var(--line);background:var(--card-2);color:var(--text);font-family:inherit;font-size:12.5px;font-weight:550;
+    padding:9px 14px;border-radius:10px;cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:7px;}
+  .btn:hover{background:#2c2f38;border-color:#3a3e49;}
+  .btn.ghost{background:transparent;border-color:transparent;color:var(--muted);}
+  .btn.ghost:hover{color:var(--text);background:#23262e;border-color:var(--line);}
+  .btn.danger{color:var(--danger);border-color:rgba(244,114,114,.3);background:var(--danger-dim);}
+  .btn.danger:hover{background:rgba(244,114,114,.2);}
+  .btn.primary{background:linear-gradient(180deg,#3ee0a6,#10b981);color:#06251b;border-color:transparent;font-weight:700;box-shadow:0 6px 18px -6px rgba(16,185,129,.7);}
+  .btn.primary:hover{filter:brightness(1.05);}
+  .spacer{flex:1;}
+
+  /* ============ 关闭确认层 ============ */
+  .overlay{position:absolute;inset:0;background:rgba(9,10,13,.62);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;z-index:5;}
+  .overlay.show{display:flex;}
+  .dialog{width:330px;background:#1b1d23;border:1px solid #33363f;border-radius:18px;padding:20px;box-shadow:0 30px 70px -10px rgba(0,0,0,.8);}
+  .dialog .ic{width:46px;height:46px;border-radius:14px;background:var(--accent-dim);border:1px solid rgba(52,211,153,.3);display:flex;align-items:center;justify-content:center;margin-bottom:14px;}
+  .dialog h3{margin:0 0 6px;font-size:16px;font-weight:650;}
+  .dialog p{margin:0 0 16px;font-size:12.5px;color:var(--muted);line-height:1.55;}
+  .dialog .acts{display:flex;flex-direction:column;gap:9px;}
+  .dialog .acts .btn{justify-content:center;width:100%;padding:11px;}
+  .remember{display:flex;align-items:center;gap:8px;margin:14px 0 2px;font-size:11.5px;color:var(--muted-2);cursor:pointer;}
+  .cbox{width:15px;height:15px;border-radius:4px;border:1.5px solid #3d414b;display:inline-block;position:relative;}
+  .cbox.on{background:var(--accent-strong);border-color:var(--accent-strong);}
+  .cbox.on::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;border:solid #06251b;border-width:0 2px 2px 0;transform:rotate(45deg);}
+
+  /* ============ 托盘演示 ============ */
+  .traywrap{width:440px;display:flex;flex-direction:column;gap:20px;}
+  .traycard{background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);overflow:hidden;}
+  .traycard .th{padding:14px 18px;border-bottom:1px solid var(--line-soft);font-size:12.5px;color:var(--muted);}
+  .taskbar{display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:10px 16px;background:linear-gradient(180deg,#1a1c22,#14161b);}
+  .tb-ico{width:24px;height:24px;opacity:.55;color:#cfd3dc;display:flex;align-items:center;justify-content:center;}
+  .tb-clock{font-size:11px;color:#c3c8d2;line-height:1.2;text-align:center;opacity:.75;}
+  .tray-ours{width:28px;height:28px;border-radius:8px;background:#20242c;border:1px solid #343845;display:flex;align-items:center;justify-content:center;position:relative;box-shadow:0 0 0 2px rgba(52,211,153,.25);}
+  .tray-ours .dot{width:11px;height:11px;border-radius:50%;background:radial-gradient(circle at 32% 30%,#5ef0b6,#10b981);box-shadow:0 0 8px rgba(52,211,153,.8);}
+  .tray-ours .tip{position:absolute;bottom:36px;right:-30px;background:#262a33;border:1px solid #3a3e49;border-radius:8px;padding:5px 10px;font-size:11px;color:var(--text);white-space:nowrap;box-shadow:0 8px 20px rgba(0,0,0,.5);}
+  .tray-ours .tip:after{content:"";position:absolute;bottom:-5px;right:40px;width:8px;height:8px;background:#262a33;border-right:1px solid #3a3e49;border-bottom:1px solid #3a3e49;transform:rotate(45deg);}
+  .traynote{padding:14px 18px;font-size:12px;color:var(--muted);line-height:1.7;}
+  .traynote b{color:var(--text);}
+  .kbd{display:inline-block;background:#23262e;border:1px solid #343845;border-bottom-width:2px;border-radius:6px;padding:1px 7px;font-size:11px;color:var(--text);font-family:inherit;}
+  .flow{display:flex;align-items:center;gap:10px;padding:14px 18px;flex-wrap:wrap;font-size:12px;color:var(--muted);}
+  .flow .step{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;color:var(--text);}
+  .flow .arr{color:var(--accent);font-weight:700;}
+</style>
+</head>
+<body>
+  <div class="canvas-head">
+    <h1>灵岛 LingDao　设置面板 · 高保真原型<span class="badge">ToC 消费级</span></h1>
+    <p>交互模型：系统托盘小图标 → 点击弹出设置面板；关闭面板时选择「隐藏」或「彻底退出」。可实际点击体验（切换开关/滑块/位置/关闭弹窗）。</p>
+  </div>
+
+  <div class="stage">
+    <!-- 主面板 -->
+    <div class="artboard">
+      <div class="cap"><b>设置面板</b>（点右上角 ✕ 体验关闭流程）</div>
+      <div class="panel" id="panelA">
+        <div class="p-head">
+          <div class="logo"><span class="dot"></span></div>
+          <div class="p-title">
+            <span class="name">灵岛 LingDao</span>
+            <span class="ver">v0.7.0 · <em>桌面灵动岛</em></span>
+          </div>
+          <div class="win-dots">
+            <button class="win-btn" title="最小化到托盘">—</button>
+            <button class="win-btn close" title="关闭">✕</button>
+          </div>
+        </div>
+
+        <div class="p-body">
+          <div class="grp">
+            <div class="grp-t">停靠位置</div>
+            <div class="card">
+              <div class="posgrid">
+                <div class="pos" data-n="0"><div class="scr"><div class="pill" style="top:2px;left:50%;transform:translateX(-50%)"></div></div><span class="lbl">顶部居中</span><span class="check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#06251b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+                <div class="pos" data-n="1"><div class="scr"><div class="pill" style="top:2px;left:4px"></div></div><span class="lbl">左上角</span><span class="check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#06251b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+                <div class="pos" data-n="2"><div class="scr"><div class="pill" style="top:2px;right:4px"></div></div><span class="lbl">右上角</span><span class="check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#06251b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+                <div class="pos" data-n="3"><div class="scr"><div class="pill" style="left:3px;top:50%;transform:translateY(-50%);width:4px;height:16px"></div></div><span class="lbl">左侧居中</span><span class="check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#06251b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+                <div class="pos sel" data-n="4"><div class="scr"><div class="pill" style="right:3px;top:50%;transform:translateY(-50%);width:4px;height:16px"></div></div><span class="lbl">右侧居中</span><span class="check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#06251b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+                <div class="pos" data-n="5"><div class="scr"><div class="pill" style="bottom:2px;left:50%;transform:translateX(-50%)"></div></div><span class="lbl">底部居中</span><span class="check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#06251b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grp">
+            <div class="grp-t">行为</div>
+            <div class="card" style="padding:6px 14px">
+              <div class="row">
+                <div class="info"><div class="t">收起延时</div><div class="d">鼠标移开后多久自动收起</div></div>
+                <input type="range" min="0" max="1000" step="10" value="200" oninput="document.getElementById('vdelay').textContent=this.value+' ms'">
+                <div class="val" id="vdelay">200 ms</div>
+              </div>
+              <div class="row">
+                <div class="info"><div class="t">收起态字号</div><div class="d">胶囊中时间的字号</div></div>
+                <input type="range" min="12" max="40" step="1" value="22" oninput="document.getElementById('vfont').textContent=this.value+' px'">
+                <div class="val" id="vfont">22 px</div>
+              </div>
+              <div class="row">
+                <div class="info"><div class="t">收起态显示秒</div><div class="d">HH:MM:SS</div></div>
+                <div class="switch" onclick="this.classList.toggle('on')"><div class="knob"></div></div>
+              </div>
+              <div class="row">
+                <div class="info"><div class="t">展开态显示日期</div><div class="d">显示 年月日 + 星期</div></div>
+                <div class="switch" onclick="this.classList.toggle('on')"><div class="knob"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grp">
+            <div class="grp-t">外观</div>
+            <div class="card" style="padding:6px 14px">
+              <div class="row">
+                <div class="info"><div class="t">主题</div><div class="d">跟随系统或固定明暗</div></div>
+                <div class="seg"><button class="on">深色</button><button>浅色</button><button>跟随</button></div>
+              </div>
+              <div class="row">
+                <div class="info"><div class="t">背景颜色</div><div class="d">灵岛的填充色</div></div>
+                <div class="swatch"></div>
+              </div>
+              <div class="row">
+                <div class="info"><div class="t">不透明度</div><div class="d">100% 为完全不透明</div></div>
+                <input type="range" min="0" max="100" value="100" oninput="document.getElementById('valpha').textContent=this.value+'%'">
+                <div class="val" id="valpha">100%</div>
+              </div>
+              <div class="row">
+                <div class="info"><div class="t">圆角半径</div><div class="d">贴边一侧自动直角</div></div>
+                <input type="range" min="0" max="32" value="16" oninput="document.getElementById('vrad').textContent=this.value+' px'">
+                <div class="val" id="vrad">16 px</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grp">
+            <div class="grp-t">通用</div>
+            <div class="card" style="padding:6px 14px">
+              <div class="row">
+                <div class="info"><div class="t">显示灵动岛</div><div class="d">关闭后仅保留系统托盘图标</div></div>
+                <div class="switch on" onclick="this.classList.toggle('on')"><div class="knob"></div></div>
+              </div>
+              <div class="row">
+                <div class="info"><div class="t">开机自启</div><div class="d">登录 Windows 后自动运行（静默，不弹面板）</div></div>
+                <div class="switch" onclick="this.classList.toggle('on')"><div class="knob"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="p-foot">
+          <button class="btn ghost">恢复默认</button>
+          <div class="spacer"></div>
+          <button class="btn danger">退出灵岛</button>
+          <button class="btn primary">保存</button>
+        </div>
+
+        <!-- 关闭确认层 -->
+        <div class="overlay" id="ovA">
+          <div class="dialog">
+            <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 3v10" stroke="#34d399" stroke-width="2" stroke-linecap="round"/><path d="M7.5 6.5a7 7 0 1 0 9 0" stroke="#34d399" stroke-width="2" stroke-linecap="round"/></svg></div>
+            <h3>关闭灵岛</h3>
+            <p>要把它<b style="color:var(--text)">隐藏到系统托盘</b>继续后台运行，还是<b style="color:var(--danger)">彻底退出</b>（灵动岛也会一起关闭）？</p>
+            <div class="acts">
+              <button class="btn" onclick="hideOv('ovA')">隐藏到托盘（保留灵动岛）</button>
+              <button class="btn danger" onclick="hideOv('ovA')">彻底退出（关闭灵动岛）</button>
+              <button class="btn ghost" style="justify-content:center" onclick="hideOv('ovA')">取消</button>
+            </div>
+            <label class="remember" onclick="this.querySelector('.cbox').classList.toggle('on')"><span class="cbox"></span>记住我的选择，下次不再询问</label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 托盘演示 -->
+    <div class="artboard">
+      <div class="cap"><b>系统托盘小图标</b>与交互流程</div>
+      <div class="traywrap">
+        <div class="traycard">
+          <div class="th">Windows 通知区域（任务栏右下角）</div>
+          <div class="taskbar">
+            <div class="tb-ico">▮</div>
+            <div class="tb-ico"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l1.6 4.3L14 6l-3.4 2.9L11.6 14 8 11.5 4.4 14l1-5.1L2 6l4.4-.7L8 1z"/></svg></div>
+            <div class="tb-ico"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 6h9l3 2v3h-2a2 2 0 1 1-4 0H6a2 2 0 1 1-4 0V6z"/></svg></div>
+            <div class="tray-ours"><span class="dot"></span><div class="tip">灵岛 LingDao</div></div>
+            <div class="tb-clock">14:57<br>2026/11/15</div>
+          </div>
+          <div class="traynote">
+            <b>单实例小图标</b>常驻托盘。左键单击 → 弹出设置面板；右键 → 菜单「打开设置 / 显示·隐藏灵动岛 / 彻底退出」。即使灵动岛隐藏，也能从这里随时召回。
+          </div>
+        </div>
+
+        <div class="traycard">
+          <div class="th">交互流程（主流桌面应用形态）</div>
+          <div class="flow">
+            <span class="step">双击程序 / 点托盘图标</span><span class="arr">→</span>
+            <span class="step">直接弹出设置面板</span><span class="arr">→</span>
+            <span class="step">点 ✕</span><span class="arr">→</span>
+            <span class="step">选择 隐藏 / 彻底退出</span>
+          </div>
+          <div class="traynote" style="border-top:1px solid var(--line-soft)">
+            · <b>隐藏</b>：关闭面板并把灵动岛从桌面隐藏，仅留托盘图标（后台继续运行）。<br>
+            · <b>彻底退出</b>：结束进程，灵动岛与托盘图标一并消失。<br>
+            · 双击桌面快捷方式 = 打开设置面板；一次只允许一个实例（已在运行则唤出面板）。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // 位置选择
+  document.querySelectorAll('#panelA .pos').forEach(function(p){
+    p.addEventListener('click', function(){
+      document.querySelectorAll('#panelA .pos').forEach(function(x){x.classList.remove('sel');});
+      p.classList.add('sel');
+    });
+  });
+  // 分段控件
+  document.querySelectorAll('#panelA .seg').forEach(function(seg){
+    seg.querySelectorAll('button').forEach(function(b){
+      b.addEventListener('click', function(){
+        seg.querySelectorAll('button').forEach(function(x){x.classList.remove('on');});
+        b.classList.add('on');
+      });
+    });
+  });
+  // 关闭按钮 → 弹确认
+  document.querySelectorAll('#panelA .win-btn.close').forEach(function(b){
+    b.addEventListener('click', function(){ document.getElementById('ovA').classList.add('show'); });
+  });
+  function hideOv(id){ document.getElementById(id).classList.remove('show'); }
+  if(location.hash === '#dialog'){ document.getElementById('ovA').classList.add('show'); }
+  // 点遮罩关闭
+  document.getElementById('ovA').addEventListener('click', function(e){ if(e.target===this) hideOv('ovA'); });
+</script>
+</body>
+</html>

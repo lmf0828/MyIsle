@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>灵岛 · 音乐模块原型（收起态 + 展开态 · 母版）</title>
+<style>
+  :root{--ink:#e9edf3;--muted:#9aa4b2;--muted2:#6f7a89;--line:rgba(255,255,255,.07);--accent:#2fd6a6;--accent2:#39c7ff}
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:#0b0e13;color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  body{display:flex;flex-direction:column;align-items:center;padding:34px 0 60px;gap:8px}
+  .block{width:1100px;margin-bottom:26px}
+  .cap{color:#6f7a89;font-size:12.5px;margin:0 0 12px}
+  .desktop{position:relative;width:1100px;border-radius:16px;overflow:hidden;
+    background:
+      radial-gradient(600px 220px at 50% -40%, rgba(57,199,255,.18), transparent 60%),
+      radial-gradient(600px 260px at 85% 120%, rgba(47,214,166,.12), transparent 60%),
+      linear-gradient(180deg,#141a24,#0c1016);
+    border:1px solid rgba(255,255,255,.06);
+    display:flex;justify-content:center;align-items:flex-start}
+  .desktop.col{height:150px}
+  .desktop.exp{padding:30px 0 34px}
+  .desktop::after{content:"模拟桌面背景";position:absolute;right:14px;bottom:10px;font-size:11px;color:rgba(255,255,255,.16)}
+
+  /* ===== 收起态 刘海胶囊 ===== */
+  .pill{display:inline-flex;align-items:center;gap:10px;height:34px;max-width:470px;width:max-content;
+    padding:0 14px;border-radius:0 0 17px 17px;background:linear-gradient(180deg,#20262f,#171c24);
+    border:1px solid rgba(255,255,255,.08);border-top:0;
+    box-shadow:0 8px 24px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+    justify-content:center;overflow:hidden;color:#9aa4b2;font-size:13.5px}
+  .clinewrap{position:relative;overflow:hidden;width:280px;flex:0 0 280px;display:flex;justify-content:center}
+  .clinewrap.long{justify-content:flex-start}
+  .cmove{position:relative;display:inline-flex;white-space:nowrap;will-change:transform}
+  .cf{position:absolute;left:0;top:0;height:100%;overflow:hidden;white-space:nowrap;color:var(--accent);filter:drop-shadow(0 0 8px rgba(47,214,166,.4))}
+  .cfi{white-space:nowrap}
+  .eq{display:inline-flex;align-items:flex-end;gap:2.5px;height:14px;flex:0 0 auto}
+  .eq i{width:2.5px;background:#2fd6a6;border-radius:2px;animation:eq 1s ease-in-out infinite}
+  .eq i:nth-child(2){animation-delay:.25s}
+  .eq i:nth-child(3){animation-delay:.5s}
+  @keyframes eq{0%,100%{height:4px}50%{height:14px}}
+  .clock{font-variant-numeric:tabular-nums;font-weight:600;color:#dfe6ef;flex:0 0 auto}
+  .dot{width:6px;height:6px;border-radius:50%;background:#2fd6a6;box-shadow:0 0 8px #2fd6a6;flex:0 0 auto}
+
+  /* ===== 展开态 面板 ===== */
+  .panel{width:524px;border-radius:22px;background:linear-gradient(180deg,rgba(30,36,45,.97),rgba(22,27,34,.99));
+    border:1px solid rgba(255,255,255,.08);box-shadow:0 24px 60px rgba(0,0,0,.6);display:flex;overflow:hidden}
+  .rail{width:66px;flex:0 0 66px;padding:12px 0;display:flex;flex-direction:column;align-items:center;gap:8px;
+    background:rgba(0,0,0,.22);border-right:1px solid var(--line)}
+  .ritem{width:48px;border:0;background:transparent;color:var(--muted2);cursor:pointer;border-radius:12px;padding:8px 0 6px;
+    display:flex;flex-direction:column;align-items:center;gap:3px;font-family:inherit}
+  .ritem .rg{font-size:17px}.ritem .rl{font-size:10.5px}
+  .ritem.active{color:#062a20;background:linear-gradient(180deg,#2fd6a6,#23c295);box-shadow:0 6px 14px rgba(47,214,166,.3)}
+  .content{flex:1 1 auto;min-width:0;padding:16px 16px 14px}
+  .music{display:flex;gap:14px;align-items:center}
+  .tt{position:relative;width:172px;height:172px;flex:0 0 172px}
+  .ttsvg{width:100%;height:100%;display:block}
+  .discRot{transform-box:fill-box;transform-origin:center;animation:spin 6s linear infinite}
+  .tt.paused .discRot{animation-play-state:paused}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .meta{flex:1 1 auto;min-width:0}
+  .title{font-size:17px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub{font-size:12px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .progress{margin-top:11px}
+  .bar{position:relative;height:5px;border-radius:99px;background:rgba(255,255,255,.12)}
+  .fill{position:absolute;left:0;top:0;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent2),var(--accent));width:0}
+  .knob{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.5);left:0}
+  .times{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted2);margin-top:5px;font-variant-numeric:tabular-nums}
+  .controls{display:flex;align-items:center;gap:11px;margin-top:10px}
+  .ctl{width:32px;height:32px;border-radius:50%;border:1px solid var(--line);background:#1a2028;color:#cfd7e2;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .ctl.play{width:40px;height:40px;background:linear-gradient(180deg,#2fd6a6,#22c295);color:#052a20;border:0;font-size:15px;box-shadow:0 6px 16px rgba(47,214,166,.35)}
+  .src{margin-left:auto;font-size:11.5px;color:var(--muted)}
+  .lyrics{margin-top:14px;height:150px;display:flex;flex-direction:column;align-items:center;gap:9px;justify-content:center;text-align:center;
+    -webkit-mask-image:linear-gradient(180deg,transparent,#000 15%,#000 85%,transparent)}
+  .ln{font-size:13px;color:#59626f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;transition:.25s}
+  .ln.prev{color:#4a525d}.ln.next{color:#6c7683}
+  .ln.cur{font-size:16px;font-weight:700;color:#59626f;width:100%}
+  .lw{position:relative;overflow:hidden;width:100%;display:flex;justify-content:center}
+  .lw.long{justify-content:flex-start}
+  .lm{position:relative;display:inline-flex;white-space:nowrap;will-change:transform}
+  .lm .kf{position:absolute;left:0;top:0;height:100%;overflow:hidden;white-space:nowrap;color:var(--accent);filter:drop-shadow(0 0 12px rgba(47,214,166,.35))}
+  .lm .kfi{white-space:nowrap}
+</style>
+</head>
+<body>
+  <div class="block">
+    <div class="cap">① 收起态 · 贴顶刘海胶囊（滚动当前歌词 + 跳动频谱 + 时间）</div>
+    <div class="desktop col">
+      <div class="pill">
+        <div class="clinewrap" id="clinewrap"><div class="cmove" id="cmove"><span id="cb"></span><span class="cf" id="cf"><span class="cfi" id="cfi"></span></span></div></div>
+        <div class="eq"><i></i><i></i><i></i></div>
+        <div class="clock" id="clock">14:32</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="cap">② 展开态 · 音乐（唱片旋转 + 唱臂搭上播放 / 拨开暂停 + 五行渐进歌词）</div>
+    <div class="desktop exp">
+      <div class="panel">
+        <div class="rail">
+          <button class="ritem active"><span class="rg">♪</span><span class="rl">音乐</span></button>
+          <button class="ritem"><span class="rg">☀</span><span class="rl">天气</span></button>
+          <button class="ritem"><span class="rg">▦</span><span class="rl">日历</span></button>
+          <button class="ritem"><span class="rg">✉</span><span class="rl">未读</span></button>
+        </div>
+        <div class="content">
+          <div class="music">
+            <div class="tt" id="tt">
+              <svg class="ttsvg" viewBox="0 0 180 180">
+                <defs>
+                  <radialGradient id="platter" cx="50%" cy="38%" r="72%"><stop offset="0" stop-color="#1c222b"/><stop offset="1" stop-color="#090c11"/></radialGradient>
+                  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7cc8f4"/><stop offset="0.55" stop-color="#bfe6ff"/><stop offset="1" stop-color="#eaf7ff"/></linearGradient>
+                  <radialGradient id="sun" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#fffdf2"/><stop offset="0.55" stop-color="#ffe9a8"/><stop offset="1" stop-color="#ffd97a" stop-opacity="0"/></radialGradient>
+                  <linearGradient id="hill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a7dccb"/><stop offset="1" stop-color="#5fae95"/></linearGradient>
+                  <linearGradient id="gloss" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity=".30"/><stop offset="0.38" stop-color="#ffffff" stop-opacity="0"/><stop offset="1" stop-color="#000000" stop-opacity=".20"/></linearGradient>
+                  <clipPath id="discClip"><circle cx="90" cy="90" r="66"/></clipPath>
+                  <linearGradient id="armMetal" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f6fafd"/><stop offset="0.5" stop-color="#c3cdd8"/><stop offset="1" stop-color="#8894a2"/></linearGradient>
+                  <radialGradient id="pivotGrad" cx="38%" cy="32%" r="75%"><stop offset="0" stop-color="#e2e9f1"/><stop offset="0.5" stop-color="#9aa6b4"/><stop offset="1" stop-color="#525d69"/></radialGradient>
+                  <linearGradient id="headGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e6edf4"/><stop offset="1" stop-color="#96a1ae"/></linearGradient>
+                </defs>
+                <circle cx="90" cy="90" r="68" fill="url(#platter)" stroke="rgba(255,255,255,.08)"/>
+                <g class="discRot">
+                  <g clip-path="url(#discClip)">
+                    <rect x="24" y="24" width="132" height="132" fill="url(#sky)"/>
+                    <circle cx="122" cy="54" r="27" fill="url(#sun)"/>
+                    <circle cx="122" cy="54" r="10.5" fill="#fffbe6"/>
+                    <ellipse cx="58" cy="58" rx="21" ry="7" fill="#ffffff" opacity=".92"/>
+                    <ellipse cx="74" cy="65" rx="15" ry="6" fill="#ffffff" opacity=".85"/>
+                    <ellipse cx="116" cy="90" rx="19" ry="6" fill="#ffffff" opacity=".8"/>
+                    <path d="M24 134 Q 58 110 94 128 T 156 118 L156 156 L24 156 Z" fill="url(#hill)" opacity=".92"/>
+                    <path d="M24 142 Q 70 124 110 138 T 156 134 L156 156 L24 156 Z" fill="#3f8f78" opacity=".55"/>
+                    <text x="90" y="112" text-anchor="middle" font-size="18" font-weight="800" fill="#2a4b5e" letter-spacing="3" font-family="Microsoft YaHei,sans-serif">晴天</text>
+                    <text x="90" y="126" text-anchor="middle" font-size="7" fill="#35586b" letter-spacing="1.2" font-family="Microsoft YaHei,sans-serif">周杰伦 · 叶惠美</text>
+                  </g>
+                  <g clip-path="url(#discClip)" opacity=".5">
+                    <circle cx="90" cy="90" r="61" fill="none" stroke="rgba(255,255,255,.10)" stroke-width=".7"/>
+                    <circle cx="90" cy="90" r="49" fill="none" stroke="rgba(255,255,255,.10)" stroke-width=".6"/>
+                    <circle cx="90" cy="90" r="37" fill="none" stroke="rgba(255,255,255,.09)" stroke-width=".6"/>
+                  </g>
+                  <circle cx="90" cy="90" r="66" fill="none" stroke="rgba(255,255,255,.25)" stroke-width="1"/>
+                </g>
+                <circle cx="90" cy="90" r="66" clip-path="url(#discClip)" fill="url(#gloss)"/>
+                <circle cx="90" cy="90" r="3.1" fill="#0b0e13"/>
+                <circle cx="90" cy="90" r="1.1" fill="#6b7784"/>
+                <g transform="translate(-12,0)">
+                  <circle cx="158" cy="20" r="13" fill="url(#pivotGrad)" stroke="#3a444f" stroke-width=".8"/>
+                  <circle cx="158" cy="20" r="9.2" fill="none" stroke="rgba(255,255,255,.28)" stroke-width=".7"/>
+                  <circle cx="158" cy="20" r="5.6" fill="#2a333d"/>
+                  <circle cx="158" cy="20" r="2.4" fill="#cfd8e2"/>
+                  <g class="armGroup" id="arm">
+                    <path d="M157 24 C156 34 153 43 152 50 L139.3 70.3" fill="none" stroke="#000" stroke-opacity=".22" stroke-width="4.0" stroke-linecap="round"/>
+                    <path d="M157 24 C156 34 153 43 152 50 L139.3 70.3" fill="none" stroke="url(#armMetal)" stroke-width="2.5" stroke-linecap="round"/>
+                    <path d="M157 24 C156 34 153 43 152 50 L139.3 70.3" fill="none" stroke="#ffffff" stroke-opacity=".5" stroke-width=".7" stroke-linecap="round" transform="translate(-.5,-.6)"/>
+                    <g transform="translate(139.3,70.3) rotate(121)">
+                      <rect x="0" y="-4.4" width="15" height="8.8" rx="2.4" fill="url(#headGrad)" stroke="#5a646f" stroke-width=".6"/>
+                      <rect x="0" y="-4.4" width="3" height="8.8" rx="1.2" fill="#c2ccd7" opacity=".9"/>
+                    </g>
+                  </g>
+                </g>
+              </svg>
+            </div>
+            <div class="meta">
+              <div class="title">晴天</div>
+              <div class="sub">周杰伦 · 叶惠美</div>
+              <div class="progress">
+                <div class="bar"><div class="fill" id="fill"></div><div class="knob" id="knob"></div></div>
+                <div class="times"><span id="tCur">0:00</span><span>4:29</span></div>
+              </div>
+              <div class="controls">
+                <button class="ctl">&#9198;</button>
+                <button class="ctl play" id="playBtn">&#10074;&#10074;</button>
+                <button class="ctl">&#9197;</button>
+                <div class="src">♪ 汽水音乐</div>
+              </div>
+            </div>
+          </div>
+          <div class="lyrics" id="lyrics"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const LINES=[
+  '从前从前 有个人爱你很久',
+  '但偏偏 风渐渐 把距离吹得好远',
+  '我知道回忆是很重的行李 它压得我快喘不过气 可我还是舍不得丢弃',
+  '故事的小黄花 从出生那年就飘着',
+  '为你翘课的那一天 花落的那一天',
+  '消失的下雨天 我好想再淋一遍',
+  '好不容易 又能再多爱一天',
+  '但故事的最后你好像还是说了拜拜'
+];
+const DUR=269;
+const params=new URLSearchParams(location.search);
+const detT=params.get('t');
+const tt=document.getElementById('tt');
+const fill=document.getElementById('fill'), knob=document.getElementById('knob'), tCur=document.getElementById('tCur');
+const lyrics=document.getElementById('lyrics'); const playBtn=document.getElementById('playBtn');
+const cb=document.getElementById('cb'), cfi=document.getElementById('cfi'), cf=document.getElementById('cf'), clock=document.getElementById('clock');
+const clinewrap=document.getElementById('clinewrap'), cmove=document.getElementById('cmove');
+let playing = !(params.get('paused')==='1' || location.hash.indexOf('paused')>=0);
+function setArm(deg){ var g=document.getElementById('arm'); if(g) g.setAttribute('transform','rotate('+deg+' 158 20)'); }
+const PLAY_ANGLE=-15, PAUSE_ANGLE=-41;
+let armAngle = playing ? PLAY_ANGLE : PAUSE_ANGLE; setArm(armAngle);
+if(!playing){ tt.classList.add('paused'); playBtn.innerHTML='&#9654;'; }
+function fmt(s){s=Math.max(0,Math.floor(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');}
+
+/* 通用：超宽则横向跑马灯来回滚动，否则居中 */
+function setMarquee(wrapEl, moveEl){
+  if(!wrapEl||!moveEl) return;
+  if(moveEl._anim){ moveEl._anim.cancel(); moveEl._anim=null; }
+  moveEl.style.transform='';
+  const over=moveEl.scrollWidth - wrapEl.clientWidth;
+  if(over>2){
+    wrapEl.classList.add('long');
+    const dur=Math.max(2600, over*32);
+    moveEl._anim=moveEl.animate(
+      [{transform:'translateX(0)'},{transform:'translateX(-'+over+'px)'}],
+      {duration:dur, iterations:Infinity, direction:'alternate', easing:'linear'});
+  }else{
+    wrapEl.classList.remove('long');
+  }
+}
+
+/* ---- 收起态（渐进歌词 + 超长跑马灯） ---- */
+let cLineKey=-1;
+function updateCollapsed(t){
+  const i=Math.floor(t/3.2)%LINES.length;
+  const line=LINES[i];
+  if(i!==cLineKey){ cLineKey=i; cb.textContent=line; cfi.textContent=line; setMarquee(clinewrap,cmove); }
+  const p=Math.max(0,Math.min(1,(t%3.2)/3.2))*100;
+  cf.style.width=p.toFixed(1)+'%';
+  const sec=Math.floor(t); clock.textContent='14:'+String((32+sec)%60).padStart(2,'0');
+}
+
+/* ---- 展开态 ---- */
+let curIdx=-1;
+function renderLyrics(idx){
+  if(idx===curIdx) return; curIdx=idx;
+  lyrics.innerHTML='';
+  for(let k=-2;k<=2;k++){
+    const li=((idx+k)%LINES.length+LINES.length)%LINES.length;
+    const d=document.createElement('div');
+    d.className='ln '+(k===0?'cur':(k<0?'prev':'next'));
+    if(k===0){
+      d.innerHTML='<div class="lw"><div class="lm"><span class="kb"></span><span class="kf"><span class="kfi"></span></span></div></div>';
+      d.querySelector('.kb').textContent=LINES[li];
+      d.querySelector('.kfi').textContent=LINES[li];
+    }else{ d.textContent=LINES[li]; }
+    lyrics.appendChild(d);
+  }
+  const cur=lyrics.children[2];
+  if(cur){ const lw=cur.querySelector('.lw'), lm=cur.querySelector('.lm'); if(lw&&lm) setMarquee(lw,lm); }
+}
+function paintKaraoke(t){
+  const el=lyrics.children[2]; if(!el) return;
+  const kf=el.querySelector('.kf'); if(!kf) return;
+  const p=Math.max(0,Math.min(1,(t%3.2)/3.2))*100;
+  kf.style.width=p.toFixed(1)+'%';
+}
+function updateExpanded(t){
+  const pos=t%DUR;
+  fill.style.width=(pos/DUR*100).toFixed(2)+'%';
+  knob.style.left=(pos/DUR*100).toFixed(2)+'%';
+  tCur.textContent=fmt(pos);
+  const idx=Math.floor(t/3.2)%LINES.length;
+  renderLyrics(idx); paintKaraoke(t);
+}
+function updateAll(t){ updateCollapsed(t); updateExpanded(t); }
+
+playBtn.addEventListener('click',()=>{
+  playing=!playing;
+  tt.classList.toggle('paused',!playing);
+  playBtn.innerHTML=playing?'&#10074;&#10074;':'&#9654;';
+  const to=playing?PLAY_ANGLE:PAUSE_ANGLE, from=armAngle, t0=performance.now();
+  (function step(now){var k=Math.min(1,(now-t0)/700);var e=1-Math.pow(1-k,3);armAngle=from+(to-from)*e;setArm(armAngle);if(k<1)requestAnimationFrame(step);})(t0);
+});
+
+if(detT!==null){ updateAll(parseFloat(detT)||0); }
+else{ let t=0,last=performance.now(); requestAnimationFrame(function loop(now){ if(playing) t+=(now-last)/1000; last=now; updateAll(t); requestAnimationFrame(loop); }); }
+</script>
+</body>
+</html>

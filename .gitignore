@@ -1,0 +1,17 @@
+# build output
+/target
+/dist
+/build_out.txt
+*.pdb
+
+# runtime data / local caches (never commit)
+/data
+
+# local exe copies
+/LingDao.exe
+
+# 本地工具/素材，不参与发布
+/NeteaseCloudMusicApi
+/bili_motuan
+/motuan_face
+/refs
