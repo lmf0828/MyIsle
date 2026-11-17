@@ -799,7 +799,6 @@ struct IslandApp {
 
 impl IslandApp {
     fn new(tray: Option<Tray>, open_panel: bool) -> Self {
-        platform::start_netease_reader();
         let cfg = Config::load();
         let (lyr_tx, lyr_req_rx) = std::sync::mpsc::channel::<(String, String, String, f64, bool)>();
         let (lyr_res_tx, lyr_rx) =
@@ -1073,14 +1072,11 @@ impl IslandApp {
     }
 
     fn duration_est(&self) -> f64 {
-        // 汽水：以播放条上读到的真实总时长为准（SMTC 常给错，如 30s 试听/旧值）。
-        {
-            let a = self.music.app_id.to_ascii_lowercase();
-            if (a.contains("汽水") || a.contains("soda") || a.contains("qishui")) && self.soda_dur >= 20.0 {
-                return self.soda_dur;
-            }
+        // 汽水：只用汽水自己播放条读到的真实总时长；读不到就用 SMTC 上报值。不借用任何网易云缓存。
+        if self.app_is_soda() {
+            return if self.soda_dur >= 1.0 { self.soda_dur } else { self.music.duration };
         }
-        // 优先用播放器上报的真实总时长；仅当缺失/明显异常（如汽水非会员只给 30s 试听）才用歌词兜底。
+        // 优先用播放器上报的真实总时长；仅当缺失/明显异常才用歌词兜底。
         if self.music.duration >= 20.0 {
             return self.music.duration;
         }
@@ -2827,6 +2823,13 @@ impl eframe::App for IslandApp {
         let _pf_snap_ms = _pf_t_snap0.elapsed().as_secs_f32() * 1000.0;
         // 记录本次快照是否真的来自 SMTC（否则后面的窗口标题兜底会覆盖它）
         self.from_smtc = self.music.has_session && !self.music.title.is_empty();
+        // 网易云时间轴读取线程按需启停：只有当前会话是网易云时才运行，其它播放器/空闲时完全退出。
+        {
+            let a = self.music.app_id.to_ascii_lowercase();
+            let is_netease = self.music.has_session
+                && (a.contains("cloudmusic") || a.contains("netease") || a.contains("网易云"));
+            platform::set_netease_reader_enabled(is_netease);
+        }
         // 汽水 CDP 补丁自检：汽水自动更新会覆盖 app.asar 里的调试端口补丁导致歌词失效。
         // 这里每 15s 检查一次，发现没补丁就自动重打（播放中只打文件不重启，暂停/未播放时自动重启生效）。
         if !self.soda_boot_checked {

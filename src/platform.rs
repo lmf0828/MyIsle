@@ -3,7 +3,7 @@
 #![allow(non_snake_case, non_camel_case_types, dead_code)]
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicI32, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicUsize, Ordering};
 
 pub type HWND = isize;
 pub type WNDENUMPROC = Option<unsafe extern "system" fn(HWND, isize) -> i32>;
@@ -765,42 +765,60 @@ static NET_FRAC: AtomicI64 = AtomicI64::new(-1);
 static NET_POS: AtomicI64 = AtomicI64::new(-1);
 static NET_DUR: AtomicI64 = AtomicI64::new(-1);
 
-/// 后台线程定期读取网易云真实时间轴（优先内存读取，最小化也精确）；UI 线程只读缓存。
-pub fn start_netease_reader() {
-    std::thread::spawn(|| {
-        // 启动时尝试确定/校准偏移（存在 offset_scan.flag 或 MYISLE_OFFSET_SCAN 时强制执行；
-        // 否则内部会先查已保存偏移，未确定且能发现时才写盘，开销在后台线程）
-        netease_ensure_offsets();
-        let mut last_log = std::time::Instant::now();
-        loop {
-            let mut got = netease_pos_dur();
-            if got.is_none() {
-                // 版本更新后内置偏移可能失效：后台尝试用已保存偏移/自动发现校准
-                netease_ensure_offsets();
-                got = netease_pos_dur();
-            }
-            if let Some((p, d)) = got {
-                NET_POS.store((p * 1000.0) as i64, Ordering::Relaxed);
-                NET_DUR.store((d * 1000.0) as i64, Ordering::Relaxed);
-                NET_FRAC.store(-1, Ordering::Relaxed);
-                if last_log.elapsed() >= std::time::Duration::from_secs(2) {
-                    last_log = std::time::Instant::now();
-                    {
-                        use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(crate::paths::file("netease_tl.log")) {
-                            let _ = writeln!(f, "pos={:.2} dur={:.2}", p, d);
+static NET_READER_WANTED: AtomicBool = AtomicBool::new(false);
+static NET_READER_RUN: AtomicBool = AtomicBool::new(false);
+
+/// 按需启停网易云时间轴读取线程：只有当前播放器是网易云时才运行，其它时候完全退出，
+/// 不常驻、不占用后台内存。可每帧调用（只是原子开关）。
+pub fn set_netease_reader_enabled(on: bool) {
+    NET_READER_WANTED.store(on, Ordering::Relaxed);
+    if on && !NET_READER_RUN.swap(true, Ordering::SeqCst) {
+        std::thread::spawn(|| {
+            netease_ensure_offsets();
+            let mut last_log = std::time::Instant::now();
+            while NET_READER_WANTED.load(Ordering::Relaxed) {
+                let mut got = netease_pos_dur();
+                if got.is_none() {
+                    netease_ensure_offsets();
+                    got = netease_pos_dur();
+                }
+                if let Some((p, d)) = got {
+                    NET_POS.store((p * 1000.0) as i64, Ordering::Relaxed);
+                    NET_DUR.store((d * 1000.0) as i64, Ordering::Relaxed);
+                    NET_FRAC.store(-1, Ordering::Relaxed);
+                    if last_log.elapsed() >= std::time::Duration::from_secs(2) {
+                        last_log = std::time::Instant::now();
+                        {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(crate::paths::file("netease_tl.log")) {
+                                let _ = writeln!(f, "pos={:.2} dur={:.2}", p, d);
+                            }
                         }
                     }
+                } else {
+                    NET_POS.store(-1, Ordering::Relaxed);
+                    NET_DUR.store(-1, Ordering::Relaxed);
+                    let v = match netease_frac() { Some(f) => (f * 1_000_000.0) as i64, None => -1 };
+                    NET_FRAC.store(v, Ordering::Relaxed);
                 }
-            } else {
-                NET_POS.store(-1, Ordering::Relaxed);
-                NET_DUR.store(-1, Ordering::Relaxed);
-                let v = match netease_frac() { Some(f) => (f * 1_000_000.0) as i64, None => -1 };
-                NET_FRAC.store(v, Ordering::Relaxed);
+                std::thread::sleep(std::time::Duration::from_millis(200));
             }
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-    });
+            // 退出前清空缓存，避免残留旧歌进度被别处读到
+            NET_POS.store(-1, Ordering::Relaxed);
+            NET_DUR.store(-1, Ordering::Relaxed);
+            NET_FRAC.store(-1, Ordering::Relaxed);
+            NET_READER_RUN.store(false, Ordering::SeqCst);
+            // 极短时间内的开关竞态兜底：若期间又需要，重新拉起
+            if NET_READER_WANTED.load(Ordering::Relaxed) {
+                set_netease_reader_enabled(true);
+            }
+        });
+    }
+}
+
+/// 兼容旧调用：立即按需启动（内部仍受开关管理）。
+pub fn start_netease_reader() {
+    set_netease_reader_enabled(true);
 }
 
 /// 读取后台线程缓存的网易云进度比例（0..1），无则 None。
