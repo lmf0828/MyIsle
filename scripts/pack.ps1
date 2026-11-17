@@ -24,8 +24,10 @@ if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $dist 'LingDao.exe') -DestinationPath $zip -Force
 Write-Host "portable -> $zip"
 
-# Inno Setup（若已安装）
-$iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+# Inno Setup（若已安装；也支持 LINGDAO_ISCC 指定路径，便于本地便携安装）
+$iscc = $env:LINGDAO_ISCC
+if (!$iscc) { $iscc = Join-Path $root 'data\InnoSetup\ISCC.exe' }
+if (!(Test-Path $iscc)) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
 if (!(Test-Path $iscc)) { $iscc = "$env:ProgramFiles\Inno Setup 6\ISCC.exe" }
 $setup = Join-Path $dist "LingDao-Setup-$v.exe"
 if (Test-Path $iscc) {

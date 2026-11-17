@@ -1,4 +1,4 @@
-; 灵岛 i岛 — Inno Setup 安装脚本（按用户安装，无需管理员）
+﻿; 灵岛 i岛 — Inno Setup 安装脚本（按用户安装，无需管理员）
 ; CI 用法：iscc /DAppVersion=0.2.0 installer\LingDao.iss
 #ifndef AppVersion
   #define AppVersion "0.1.0"
@@ -30,7 +30,7 @@ RestartApplications=yes
 MinVersion=10.0
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
