@@ -127,5 +127,6 @@ cargo build --release
 - **GitHub 自动发布**：打 tag 即可，例如 `git tag v0.2.0 && git push origin v0.2.0`。
   - `.github/workflows/release.yml` 在 windows-latest 上构建、跑测试、生成绿色版 zip、Inno 安装包、`latest.json`，并上传到 Release。
   - 构建时注入 `LINGDAO_REPO=${{ github.repository }}`，客户端据此拼 `https://github.com/<repo>/releases/latest/download/latest.json`。
+- **代码签名**：见 `docs/SIGNING.md`（配置 `WINDOWS_PFX_BASE64` / `WINDOWS_PFX_PASSWORD` 两个 Secret 后，CI 自动签名 exe 和安装包）。
 - **客户端更新**：`src/update.rs` 启动 5s 后首查、此后每 4h；`设置 → 通用 → 软件更新` 显示版本/检查/下载/安装；安装器以 `/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS` 运行。
 - **数据目录**：发布版用 `%APPDATA%\LingDao\data`；开发/绿色版若 exe 同目录已有 `data\` 则沿用；可用 `LINGDAO_DATA_DIR` 覆盖、`LINGDAO_PORTABLE=1` 强制本地 data。
