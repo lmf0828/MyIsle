@@ -3,11 +3,11 @@
 (gradient tile + black island + Otto 'confident' mint eyes + WinIsle wordmark).
 
 Outputs (into ..\\assets):
-  winisle.ico            16/24/32/48/64/128/256  (multi-frame; wordmark only >=64)
+  winisle.ico            16/24/32/48/64/128/256  (multi-frame; wordmark on all sizes)
   winisle_256.png        wordmark @256
   winisle_preview_1024.png  wordmark @1024
-  winisle_32.png         mark(no text) @32
-  winisle_32.rgba        mark @32 raw RGBA (for tray-icon)
+  winisle_32.png         wordmark @32
+  winisle_32.rgba        wordmark @32 raw RGBA (for tray-icon)
 """
 import os, struct
 import numpy as np
@@ -129,11 +129,11 @@ master_name.resize((256, 256), Image.LANCZOS).save(os.path.join(ASSETS, "winisle
 sizes = [16, 24, 32, 48, 64, 128, 256]
 frames = []
 for s in sizes:
-    src = master_name if s >= 64 else master_mark
+    src = master_name  # always the wordmark version (user: use the one with the name)
     frames.append((s, to_size(src, s)))
 write_ico(os.path.join(ASSETS, "winisle.ico"), frames)
 
-icon32 = to_size(master_mark, 32)
+icon32 = to_size(master_name, 32)
 icon32.save(os.path.join(ASSETS, "winisle_32.png"))
 open(os.path.join(ASSETS, "winisle_32.rgba"), "wb").write(icon32.tobytes())
 
