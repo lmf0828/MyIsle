@@ -1,12 +1,12 @@
 //! 应用内更新：检查 GitHub Release 的 latest.json、下载安装包、校验并启动安装器。
 //!
 //! 清单地址优先级：
-//!   1. 环境变量 `MYISLE_UPDATE_URL`（可为 http(s) 或本地文件路径，方便测试）
-//!   2. 编译期 `MYISLE_REPO`（CI 注入 `owner/repo`）→
+//!   1. 环境变量 `WINISLE_UPDATE_URL`（可为 http(s) 或本地文件路径，方便测试）
+//!   2. 编译期 `WINISLE_REPO`（CI 注入 `owner/repo`）→
 //!      https://github.com/<owner>/<repo>/releases/latest/download/latest.json
 //!
 //! latest.json 结构：
-//! { "version":"0.2.0", "notes":"...", "url":"https://.../MyIsle-Setup-0.2.0.exe",
+//! { "version":"0.2.0", "notes":"...", "url":"https://.../WinIsle-Setup-0.2.0.exe",
 //!   "sha256":"...", "size":12345678, "mandatory":false, "pub_date":"2026-11-20" }
 
 use serde_json::Value;
@@ -29,9 +29,9 @@ pub struct Manifest {
 }
 
 fn repo_slug() -> Option<String> {
-    let r = std::env::var("MYISLE_REPO")
+    let r = std::env::var("WINISLE_REPO")
         .ok()
-        .or_else(|| option_env!("MYISLE_REPO").map(|s| s.to_string()))?;
+        .or_else(|| option_env!("WINISLE_REPO").map(|s| s.to_string()))?;
     let r = r.trim().to_string();
     if r.is_empty() || r.contains("YOUR_") {
         None
@@ -42,7 +42,7 @@ fn repo_slug() -> Option<String> {
 
 /// 返回清单 URL；没有配置仓库时返回 None（开发版默认不联网检查）。
 pub fn manifest_url() -> Option<String> {
-    if let Ok(u) = std::env::var("MYISLE_UPDATE_URL") {
+    if let Ok(u) = std::env::var("WINISLE_UPDATE_URL") {
         if !u.trim().is_empty() {
             return Some(u.trim().to_string());
         }
@@ -127,7 +127,7 @@ fn check_via_api(repo: &str) -> Result<Option<Manifest>, String> {
         .build();
     let resp = agent
         .get(&url)
-        .set("User-Agent", "MyIsle-Update")
+        .set("User-Agent", "WinIsle-Update")
         .set("Accept", "application/vnd.github+json")
         .call()
         .map_err(|e| e.to_string())?;
@@ -147,7 +147,7 @@ fn check_via_api(repo: &str) -> Result<Option<Manifest>, String> {
     if version.is_empty() {
         return Err("release 缺少 tag_name".into());
     }
-    let wanted = format!("MyIsle-Setup-{}.exe", version);
+    let wanted = format!("WinIsle-Setup-{}.exe", version);
     let assets = v.get("assets").and_then(|x| x.as_array()).cloned().unwrap_or_default();
     let mut chosen = None;
     for a in &assets {
@@ -160,7 +160,7 @@ fn check_via_api(repo: &str) -> Result<Option<Manifest>, String> {
     if chosen.is_none() {
         for a in &assets {
             let name = a.get("name").and_then(|x| x.as_str()).unwrap_or("").to_lowercase();
-            if name.starts_with("myisle-setup-") && name.ends_with(".exe") {
+            if name.starts_with("winisle-setup-") && name.ends_with(".exe") {
                 chosen = Some(a.clone());
                 break;
             }
@@ -168,7 +168,7 @@ fn check_via_api(repo: &str) -> Result<Option<Manifest>, String> {
     }
     let a = match chosen {
         Some(a) => a,
-        None => return Err("release 中没有 MyIsle-Setup-*.exe".into()),
+        None => return Err("release 中没有 WinIsle-Setup-*.exe".into()),
     };
     let id = a.get("id").and_then(|x| x.as_u64()).ok_or("asset 缺少 id")?;
     let size = a.get("size").and_then(|x| x.as_u64()).unwrap_or(0);
@@ -218,7 +218,7 @@ pub fn is_newer(a: &str, b: &str) -> bool {
 /// Ok(None) 表示已是最新（或未配置更新源）；Err 表示网络/格式错误。
 pub fn check() -> Result<Option<Manifest>, String> {
     // Explicit override (local file / custom URL) keeps the manifest path.
-    if let Ok(u) = std::env::var("MYISLE_UPDATE_URL") {
+    if let Ok(u) = std::env::var("WINISLE_UPDATE_URL") {
         let u = u.trim().to_string();
         if !u.is_empty() {
             let m = parse_manifest(&read_text(&u)?)?;
@@ -272,7 +272,7 @@ fn download(url: &str, dest: &Path) -> Result<(), String> {
         .build();
     let resp = agent
         .get(url)
-        .set("User-Agent", "MyIsle-Update")
+        .set("User-Agent", "WinIsle-Update")
         .set("Accept", "application/octet-stream")
         .call()
         .map_err(|e| e.to_string())?;
@@ -295,7 +295,7 @@ fn download_with_progress(url: &str, dest: &Path, pct: &AtomicU8) -> Result<(), 
         .build();
     let resp = agent
         .get(url)
-        .set("User-Agent", "MyIsle-Update")
+        .set("User-Agent", "WinIsle-Update")
         .set("Accept", "application/octet-stream")
         .call()
         .map_err(|e| e.to_string())?;
@@ -335,7 +335,7 @@ pub fn download_setup_with_progress(m: &Manifest, pct: Arc<AtomicU8>) -> Result<
         .rsplit(|c| c == '/' || c == '\\')
         .next()
         .filter(|s| s.to_lowercase().ends_with(".exe"))
-        .unwrap_or("MyIsle-Setup.exe");
+        .unwrap_or("WinIsle-Setup.exe");
     let dest = upd_dir().join(format!("{}-{}", m.version, name));
     let tmp = dest.with_extension("part");
     download_with_progress(&m.url, &tmp, &pct)?;
@@ -360,7 +360,7 @@ pub fn download_setup(m: &Manifest) -> Result<PathBuf, String> {
         .rsplit(|c| c == '/' || c == '\\')
         .next()
         .filter(|s| s.to_lowercase().ends_with(".exe"))
-        .unwrap_or("MyIsle-Setup.exe");
+        .unwrap_or("WinIsle-Setup.exe");
     let dest = upd_dir().join(format!("{}-{}", m.version, name));
     let tmp = dest.with_extension("part");
     download(&m.url, &tmp)?;
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     #[ignore]
     fn probe_download_local() {
-        let src = std::env::temp_dir().join("myisle_upd_src.exe");
+        let src = std::env::temp_dir().join("winisle_upd_src.exe");
         std::fs::write(&src, b"MZ fake installer bytes for test").unwrap();
         let sha = sha256_file(&src).unwrap();
         let m = Manifest {
@@ -499,7 +499,7 @@ mod tests {
             }
         };
         println!("DOWNLOADED {}", setup.display());
-        let dir = std::env::temp_dir().join("myisle_upd_install_test");
+        let dir = std::env::temp_dir().join("winisle_upd_install_test");
         let _ = std::fs::remove_dir_all(&dir);
         let st = std::process::Command::new(&setup)
             .arg("/VERYSILENT")
@@ -509,7 +509,7 @@ mod tests {
             .arg(format!("/DIR={}", dir.display()))
             .status();
         println!("SETUP_STATUS {:?}", st);
-        let exe = dir.join("MyIsle.exe");
+        let exe = dir.join("WinIsle.exe");
         if exe.is_file() {
             println!("INSTALLED size={}", exe.metadata().map(|x| x.len()).unwrap_or(0));
             let _ = std::process::Command::new(dir.join("unins000.exe"))

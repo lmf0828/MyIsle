@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WinIsle 图标 · 刘海上下分栏 + 名字</title>
+<style>
+  :root{ --bg:#0d0e12; --card:#14161c; --line:#242a33; --ink:#e8ebf2; --mut:#8b93a3; --acc:#34d399; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:900px;margin:0 auto;padding:48px 28px 64px;}
+  header{text-align:center;margin-bottom:30px}
+  header h1{font-size:25px;margin:0 0 10px;letter-spacing:.5px}
+  header p{margin:0;color:var(--mut);font-size:13.5px;line-height:1.7}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px 20px 18px;display:flex;flex-direction:column;align-items:center;text-align:center}
+  .big{width:210px;height:210px;margin-bottom:8px}
+  .big svg{width:100%;height:100%;display:block;filter:drop-shadow(0 12px 26px rgba(0,0,0,.45))}
+  .name{font-size:14.5px;font-weight:700;margin:6px 0 4px}
+  .desc{font-size:12.5px;color:var(--mut);line-height:1.6;max-width:250px}
+  .tag{font-size:11px;color:var(--acc);border:1px solid rgba(52,211,153,.35);border-radius:999px;padding:2px 9px;margin-top:9px}
+  .smalls{display:flex;align-items:flex-end;gap:14px;margin-top:12px;opacity:.95}
+  .smalls svg{display:block}
+  .recdot{position:relative}
+  .recdot:before{content:"推荐";position:absolute;top:-11px;left:50%;transform:translateX(-50%);background:var(--acc);color:#08110d;font-size:11px;font-weight:800;border-radius:999px;padding:3px 10px;letter-spacing:1px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <linearGradient id="grn" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2ee6a6"/><stop offset="1" stop-color="#12b981"/></linearGradient>
+  <linearGradient id="grnV" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#39e6b0"/><stop offset="1" stop-color="#10b47e"/></linearGradient>
+</defs></svg>
+
+<div class="wrap">
+  <header>
+    <h1>WinIsle 图标 · 上下分栏 + 刘海 + 名字</h1>
+    <p>方形圆角图标，上半部分做成“刘海”（分隔线两端圆角），名字 WinIsle 写在刘海上。<br>形状按你的思路固定，下面只换配色，选一套。</p>
+  </header>
+
+  <div class="grid">
+
+    <!-- V1 深底亮绿刘海 -->
+    <div class="card recdot">
+      <div class="big"><svg viewBox="0 0 256 256">
+        <defs><clipPath id="clipV1"><rect x="8" y="8" width="240" height="240" rx="56"/></clipPath></defs>
+        <g clip-path="url(#clipV1)">
+          <rect x="8" y="8" width="240" height="240" fill="#14171f"/>
+          <path d="M8 8 L248 8 L248 90 Q248 116 222 116 L34 116 Q8 116 8 90 Z" fill="url(#grnV)"/>
+        </g>
+        <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="rgba(255,255,255,0.07)"/>
+        <text x="128" y="66" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI,Arial,Helvetica,sans-serif" font-weight="800" font-size="47" letter-spacing="0.5" fill="#06231a">WinIsle</text>
+      </svg></div>
+      <div class="name">深底 · 亮绿刘海</div>
+      <div class="desc">深色方底，刘海用品牌绿渐变，名字用深色压在绿上。对比清晰、最像“产品图标”。</div>
+      <div class="tag">配色 1</div>
+    </div>
+
+    <!-- V2 深底深灰刘海 绿字 -->
+    <div class="card">
+      <div class="big"><svg viewBox="0 0 256 256">
+        <defs><clipPath id="clipV2"><rect x="8" y="8" width="240" height="240" rx="56"/></clipPath></defs>
+        <g clip-path="url(#clipV2)">
+          <rect x="8" y="8" width="240" height="240" fill="#0f1116"/>
+          <path d="M8 8 L248 8 L248 90 Q248 116 222 116 L34 116 Q8 116 8 90 Z" fill="#1e242e"/>
+        </g>
+        <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="rgba(255,255,255,0.07)"/>
+        <text x="128" y="66" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI,Arial,Helvetica,sans-serif" font-weight="800" font-size="47" letter-spacing="0.5" fill="#34d399">WinIsle</text>
+      </svg></div>
+      <div class="name">深底 · 深灰刘海</div>
+      <div class="desc">整体很低调，刘海用略亮的深灰，名字用品牌绿。高级、耐看。</div>
+      <div class="tag">配色 2</div>
+    </div>
+
+    <!-- V3 绿底深刘海 -->
+    <div class="card">
+      <div class="big"><svg viewBox="0 0 256 256">
+        <defs><clipPath id="clipV3"><rect x="8" y="8" width="240" height="240" rx="56"/></clipPath></defs>
+        <g clip-path="url(#clipV3)">
+          <rect x="8" y="8" width="240" height="240" fill="url(#grn)"/>
+          <path d="M8 8 L248 8 L248 90 Q248 116 222 116 L34 116 Q8 116 8 90 Z" fill="#0e1217"/>
+        </g>
+        <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="rgba(0,0,0,0.18)"/>
+        <text x="128" y="66" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI,Arial,Helvetica,sans-serif" font-weight="800" font-size="47" letter-spacing="0.5" fill="#eafff6">WinIsle</text>
+      </svg></div>
+      <div class="name">绿底 · 深刘海</div>
+      <div class="desc">整块绿底，上半刘海是深色、名字白色。反差大、在桌面最跳。</div>
+      <div class="tag">配色 3</div>
+    </div>
+
+    <!-- V4 浅底深刘海 -->
+    <div class="card">
+      <div class="big"><svg viewBox="0 0 256 256">
+        <defs><clipPath id="clipV4"><rect x="8" y="8" width="240" height="240" rx="56"/></clipPath></defs>
+        <g clip-path="url(#clipV4)">
+          <rect x="8" y="8" width="240" height="240" fill="#eef1f4"/>
+          <path d="M8 8 L248 8 L248 90 Q248 116 222 116 L34 116 Q8 116 8 90 Z" fill="#10141a"/>
+        </g>
+        <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="rgba(0,0,0,0.10)"/>
+        <text x="128" y="66" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI,Arial,Helvetica,sans-serif" font-weight="800" font-size="47" letter-spacing="0.5" fill="#ffffff">WinIsle</text>
+      </svg></div>
+      <div class="name">浅底 · 深刘海</div>
+      <div class="desc">浅灰白底 + 深色刘海，名字白色。清爽、偏系统原生风。</div>
+      <div class="tag">配色 4</div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

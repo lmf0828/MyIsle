@@ -26,7 +26,7 @@ def load_ca():
         c = x509.load_pem_x509_certificate(open(CA_CRT_P, 'rb').read())
         return k, c
     k = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'MyIsle MITM CA')])
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'WinIsle MITM CA')])
     now = datetime.datetime.utcnow()
     c = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
          .public_key(k.public_key()).serial_number(x509.random_serial_number())

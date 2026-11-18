@@ -1,6 +1,6 @@
 //! 汽水音乐 CDP 补丁自动修复。
 //!
-//! 汽水是 Electron 应用。给它打上 `remote-debugging-port=9222` 之后，MyIsle就能
+//! 汽水是 Electron 应用。给它打上 `remote-debugging-port=9222` 之后，WinIsle就能
 //! 通过 CDP 读取渲染进程里的官方逐字歌词（见 `cdp_lyric.rs`）。但汽水每次
 //! **自动更新都会用官方 app.asar 覆盖掉补丁**，于是歌词突然失效。
 //!
@@ -245,7 +245,7 @@ fn strip_integrity(v: &mut Value) {
 /// 当 app.asar 位于 Program Files 等无写权限目录时，借一次 UAC 提权完成替换。
 fn elevated_copy_expect(src: &Path, dst: &Path, expect_patched: bool) -> Result<(), String> {
     let dir = crate::paths::data_dir();
-    let ps1 = dir.join("myisle_elevate_copy.ps1");
+    let ps1 = dir.join("winisle_elevate_copy.ps1");
     let script = format!(
         "$ErrorActionPreference='Stop'\r\nCopy-Item -LiteralPath '{}' -Destination '{}' -Force\r\n",
         src.display(),
@@ -359,7 +359,7 @@ pub fn ensure_patched() -> Result<bool, String> {
     }
 
     // 先写临时文件再替换，避免写坏。
-    let tmp = asar.with_extension("asar.myisle.tmp");
+    let tmp = asar.with_extension("asar.winisle.tmp");
     let wrote = (|| -> Result<(), String> {
         let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
         f.write_all(&rebuilt).map_err(|e| e.to_string())?;
@@ -710,7 +710,7 @@ mod tests {
     fn probe_autopatch_copy() {
         let mut bak = crate::paths::file("app.asar.bak");
         if !bak.is_file() { bak = std::path::PathBuf::from(r"D:\LingDao\data\app.asar.bak"); }
-        let base = std::env::temp_dir().join("myisle_patchsim");
+        let base = std::env::temp_dir().join("winisle_patchsim");
         let res = base.join("resources");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&res).unwrap();

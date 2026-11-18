@@ -20,7 +20,7 @@ jobs:
   build:
     runs-on: windows-latest
     env:
-      MYISLE_REPO: ${{ github.repository }}
+      WINISLE_REPO: ${{ github.repository }}
       HAS_SIGNING: ${{ secrets.WINDOWS_PFX_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
@@ -63,12 +63,12 @@ jobs:
           PFX_B64: ${{ secrets.WINDOWS_PFX_BASE64 }}
           PFX_PASS: ${{ secrets.WINDOWS_PFX_PASSWORD }}
         run: |
-          $pfx = Join-Path $env:RUNNER_TEMP "myisle.pfx"
+          $pfx = Join-Path $env:RUNNER_TEMP "winisle.pfx"
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_B64))
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $signtool) { throw "signtool not found" }
-          & $signtool.FullName sign /f $pfx /p $env:PFX_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target\release\myisle.exe
+          & $signtool.FullName sign /f $pfx /p $env:PFX_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target\release\winisle.exe
           if ($LASTEXITCODE -ne 0) { throw "sign app failed" }
 
       - name: Portable zip
@@ -76,8 +76,8 @@ jobs:
         run: |
           $v = "${{ steps.ver.outputs.version }}"
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/myisle.exe dist/MyIsle.exe -Force
-          Compress-Archive -Path dist/MyIsle.exe -DestinationPath "dist/MyIsle-$v-portable.zip" -Force
+          Copy-Item target/release/winisle.exe dist/WinIsle.exe -Force
+          Compress-Archive -Path dist/WinIsle.exe -DestinationPath "dist/WinIsle-$v-portable.zip" -Force
 
       - name: Build installer (Inno Setup)
         shell: pwsh
@@ -85,7 +85,7 @@ jobs:
           choco install innosetup --no-progress -y
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (!(Test-Path $iscc)) { $iscc = "$env:ProgramFiles\Inno Setup 6\ISCC.exe" }
-          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "installer\MyIsle.iss"
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "installer\WinIsle.iss"
           if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
 
       - name: Code sign installer (optional)
@@ -95,27 +95,27 @@ jobs:
           PFX_B64: ${{ secrets.WINDOWS_PFX_BASE64 }}
           PFX_PASS: ${{ secrets.WINDOWS_PFX_PASSWORD }}
         run: |
-          $pfx = Join-Path $env:RUNNER_TEMP "myisle.pfx"
+          $pfx = Join-Path $env:RUNNER_TEMP "winisle.pfx"
           if (!(Test-Path $pfx)) { [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_B64)) }
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $signtool) { throw "signtool not found" }
-          & $signtool.FullName sign /f $pfx /p $env:PFX_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist\MyIsle-Setup-${{ steps.ver.outputs.version }}.exe"
+          & $signtool.FullName sign /f $pfx /p $env:PFX_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist\WinIsle-Setup-${{ steps.ver.outputs.version }}.exe"
           if ($LASTEXITCODE -ne 0) { throw "sign setup failed" }
 
       - name: Write latest.json
         shell: pwsh
         run: |
           $v = "${{ steps.ver.outputs.version }}"
-          $exe = "dist/MyIsle-Setup-$v.exe"
+          $exe = "dist/WinIsle-Setup-$v.exe"
           if (!(Test-Path $exe)) { throw "missing $exe" }
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
           $size = (Get-Item $exe).Length
-          $notes = "MyIsle v$v"
+          $notes = "WinIsle v$v"
           $obj = [ordered]@{
             version   = $v
             notes     = $notes
-            url       = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/MyIsle-Setup-$v.exe"
+            url       = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/WinIsle-Setup-$v.exe"
             sha256    = $hash
             size      = $size
             mandatory = $false
@@ -129,9 +129,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: MyIsle v${{ steps.ver.outputs.version }}
+          name: WinIsle v${{ steps.ver.outputs.version }}
           files: |
-            dist/MyIsle-Setup-*.exe
-            dist/MyIsle-*-portable.zip
+            dist/WinIsle-Setup-*.exe
+            dist/WinIsle-*-portable.zip
             dist/latest.json
           fail_on_unmatched_files: true

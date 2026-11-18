@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WinIsle 图标 · 渐变底 + 双岛（黑岛+绿点）</title>
+<style>
+  :root{ --bg:#0d0e12; --card:#14161c; --line:#242a33; --ink:#e8ebf2; --mut:#8b93a3; --acc:#34d399; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:760px;margin:0 auto;padding:44px 28px 60px;}
+  header{text-align:center;margin-bottom:26px}
+  header h1{font-size:23px;margin:0 0 10px}
+  header p{margin:0;color:var(--mut);font-size:13px;line-height:1.7}
+  .hero{display:flex;justify-content:center;margin-bottom:14px}
+  .hero .big{width:240px;height:240px;filter:drop-shadow(0 16px 34px rgba(0,0,0,.5))}
+  .hero .big svg{width:100%;height:100%}
+  .cap{text-align:center;color:var(--mut);font-size:12.5px;margin-bottom:28px}
+  .previews{display:flex;justify-content:center;gap:20px;flex-wrap:wrap}
+  .pcard{border-radius:16px;padding:16px 20px;display:flex;align-items:center;gap:16px}
+  .pcard.dark{background:#15171d;border:1px solid var(--line)}
+  .pcard.light{background:#eef1f4;border:1px solid #d7dbe2}
+  .pcard .t{font-size:11px;color:var(--mut)}
+  .pcard.light .t{color:#6b7280}
+  .pcard svg{display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>WinIsle 图标 · 双岛版（按你说的改）</h1>
+    <p>底色换成清新的绿→蓝渐变；下层白岛改成黑岛；黑点改成绿点；上层保留绿色小岛。</p>
+  </header>
+
+  <div class="hero">
+    <div class="big"><svg viewBox="0 0 128 128">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/>
+      </linearGradient></defs>
+      <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#g)"/>
+      <rect x="28" y="38" width="72" height="30" rx="15" fill="#34d399" transform="rotate(-8 64 53)"/>
+      <rect x="28" y="60" width="72" height="30" rx="15" fill="#0b0f14"/>
+      <circle cx="86" cy="75" r="5.5" fill="#34d399"/>
+    </svg></div>
+  </div>
+  <div class="cap">主图标（240px）</div>
+
+  <div class="previews">
+    <div class="pcard dark">
+      <span class="t">深色桌面</span>
+      <svg width="48" height="48" viewBox="0 0 128 128"><defs><linearGradient id="gs1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#gs1)"/><rect x="28" y="38" width="72" height="30" rx="15" fill="#34d399" transform="rotate(-8 64 53)"/><rect x="28" y="60" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="75" r="5.5" fill="#34d399"/></svg>
+      <svg width="32" height="32" viewBox="0 0 128 128"><defs><linearGradient id="gs2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#gs2)"/><rect x="28" y="38" width="72" height="30" rx="15" fill="#34d399" transform="rotate(-8 64 53)"/><rect x="28" y="60" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="75" r="5.5" fill="#34d399"/></svg>
+      <svg width="22" height="22" viewBox="0 0 128 128"><defs><linearGradient id="gs3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#gs3)"/><rect x="28" y="38" width="72" height="30" rx="15" fill="#34d399" transform="rotate(-8 64 53)"/><rect x="28" y="60" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="75" r="5.5" fill="#34d399"/></svg>
+    </div>
+    <div class="pcard light">
+      <span class="t">浅色桌面</span>
+      <svg width="48" height="48" viewBox="0 0 128 128"><defs><linearGradient id="gl1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#gl1)"/><rect x="28" y="38" width="72" height="30" rx="15" fill="#34d399" transform="rotate(-8 64 53)"/><rect x="28" y="60" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="75" r="5.5" fill="#34d399"/></svg>
+      <svg width="32" height="32" viewBox="0 0 128 128"><defs><linearGradient id="gl2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#gl2)"/><rect x="28" y="38" width="72" height="30" rx="15" fill="#34d399" transform="rotate(-8 64 53)"/><rect x="28" y="60" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="75" r="5.5" fill="#34d399"/></svg>
+    </div>
+  </div>
+</div>
+</body>
+</html>

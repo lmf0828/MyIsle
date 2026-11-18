@@ -1,11 +1,11 @@
 [package]
-name = "myisle"
+name = "winisle"
 version = "0.2.1"
 edition = "2021"
-description = "MyIsle — 原创开源的 Windows 灵动岛桌面音乐伴侣"
+description = "WinIsle — 原创开源的 Windows 灵动岛桌面音乐伴侣"
 license = "MIT"
-repository = "https://github.com/lmf0828/MyIsle"
-authors = ["MyIsle contributors"]
+repository = "https://github.com/lmf0828/WinIsle"
+authors = ["WinIsle contributors"]
 
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }

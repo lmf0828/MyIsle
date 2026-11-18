@@ -76,11 +76,11 @@ extern "system" {
 const ERROR_ALREADY_EXISTS: u32 = 183;
 
 /// 单实例保护：创建一个命名互斥体。
-/// 返回 true 表示"已经有一个 MyIsle 在运行"（本次为新启动的重复实例，应立即退出）。
+/// 返回 true 表示"已经有一个 WinIsle 在运行"（本次为新启动的重复实例，应立即退出）。
 /// 句柄故意不关闭，随进程存活保持有效；进程结束时由系统释放。
 pub fn ensure_single_instance() -> bool {
     // Local\ 前缀：同一登录会话内唯一，不影响其他用户/会话。
-    let name: Vec<u16> = "Local\\MyIsle_SingleInstance_v1\0".encode_utf16().collect();
+    let name: Vec<u16> = "Local\\WinIsle_SingleInstance_v1\0".encode_utf16().collect();
     let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
     let already = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     let _ = handle; // 不关闭，进程存活期间持有
@@ -948,7 +948,7 @@ fn player_running_now() -> bool {
 // 说明：网易云每次自动更新，cloudmusic.dll 里 position/duration 的偏移可能整体平移。
 // 这里先查内置版本表/已保存偏移；都失败时后台线程用“两次快照差分”自动找出
 // “每秒+1 的 f64”（position）和稳定的“总时长 f64”，校验通过后写入
-// %APPDATA%\MyIsle\netease_offsets.txt，今后版本再用同一映像大小时直接复用。
+// %APPDATA%\WinIsle\netease_offsets.txt，今后版本再用同一映像大小时直接复用。
 
 static NET_POS_OFF: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static NET_DUR_OFF: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1149,7 +1149,7 @@ unsafe fn discover_offsets() -> Option<(usize, usize, u32)> {
 /// 后台调用：若还没偏移，尝试从已保存文件/内置表/自动发现中确定，并持久化。
 pub fn netease_ensure_offsets() {
     let flag = Some(crate::paths::file("offset_scan.flag"));
-    let force = std::env::var_os("MYISLE_OFFSET_SCAN").is_some()
+    let force = std::env::var_os("WINISLE_OFFSET_SCAN").is_some()
         || flag.as_ref().map(|p| p.exists()).unwrap_or(false);
     if let Some(p) = &flag {
         if p.exists() {

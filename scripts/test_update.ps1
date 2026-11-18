@@ -3,11 +3,11 @@ param(
     [switch]$NoLaunch
 )
 # Local update test:
-# 1) build a real MyIsle-Setup-<Version>.exe from the current working tree
+# 1) build a real WinIsle-Setup-<Version>.exe from the current working tree
 #    (temporarily sets the version, then restores Cargo.toml/app.rc)
 # 2) write data\latest_test.json pointing at that setup via file://
 # 3) reset today's update-check marker
-# 4) launch the currently installed (older) MyIsle.exe with the local manifest
+# 4) launch the currently installed (older) WinIsle.exe with the local manifest
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -26,7 +26,7 @@ try {
     Remove-Item $cargoBak, $apprcBak -ErrorAction SilentlyContinue
 }
 
-$setup = Join-Path $root "dist\MyIsle-Setup-$Version.exe"
+$setup = Join-Path $root "dist\WinIsle-Setup-$Version.exe"
 if (!(Test-Path $setup)) { throw "setup not produced: $setup" }
 $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
 $size = (Get-Item $setup).Length
@@ -53,14 +53,14 @@ if (Test-Path $cfg) {
     [IO.File]::WriteAllLines($cfg, $lines, (New-Object Text.UTF8Encoding($false)))
 }
 
-if (Get-Process MyIsle -ErrorAction SilentlyContinue) {
-    Get-Process MyIsle | Stop-Process -Force
+if (Get-Process WinIsle -ErrorAction SilentlyContinue) {
+    Get-Process WinIsle | Stop-Process -Force
     Start-Sleep -Milliseconds 800
 }
 if (!$NoLaunch) {
-    $exe = Join-Path $root "MyIsle.exe"
-    $env:MYISLE_UPDATE_URL = $manifestPath
-    $env:MYISLE_PAGE = "settings"
+    $exe = Join-Path $root "WinIsle.exe"
+    $env:WINISLE_UPDATE_URL = $manifestPath
+    $env:WINISLE_PAGE = "settings"
     Start-Process $exe
-    Write-Host "launched $exe with MYISLE_UPDATE_URL=$manifestPath"
+    Write-Host "launched $exe with WINISLE_UPDATE_URL=$manifestPath"
 }

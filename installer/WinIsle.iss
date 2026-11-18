@@ -1,0 +1,54 @@
+; WinIsle — Inno Setup 安装脚本（按用户安装，无需管理员）
+; CI 用法：iscc /DAppVersion=0.2.0 installer\WinIsle.iss
+#ifndef AppVersion
+  #define AppVersion "0.2.0"
+#endif
+#define AppName "WinIsle"
+#define AppExe "WinIsle.exe"
+
+[Setup]
+AppId={{C2E5A7B4-9D31-4F68-8A1E-3B7C9D2F5A61}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppPublisher=WinIsle
+DefaultDirName={localappdata}\Programs\WinIsle
+DefaultGroupName=WinIsle
+DisableProgramGroupPage=yes
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+OutputDir=..\dist
+OutputBaseFilename=WinIsle-Setup-{#AppVersion}
+SetupIconFile=..\assets\winisle.ico
+UninstallDisplayIcon={app}\{#AppExe}
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+CloseApplications=yes
+RestartApplications=yes
+MinVersion=10.0
+
+[Languages]
+Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "autostart"; Description: "开机自动启动 WinIsle"; GroupDescription: "附加任务:"; Flags: unchecked
+
+[Files]
+Source: "..\target\release\winisle.exe"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreversion
+
+[Icons]
+Name: "{group}\WinIsle"; Filename: "{app}\{#AppExe}"
+Name: "{group}\卸载 WinIsle"; Filename: "{uninstallexe}"
+Name: "{userdesktop}\WinIsle"; Filename: "{app}\{#AppExe}"; Tasks: autostart
+
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WinIsle"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart
+
+[Run]
+Filename: "{app}\{#AppExe}"; Description: "运行 WinIsle"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "taskkill.exe"; Parameters: "/IM {#AppExe} /F"; Flags: runhidden; RunOnceId: "KillWinIsle"

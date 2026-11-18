@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-//! MyIsle —??Windows 灵动岛?
+//! WinIsle —??Windows 灵动岛?
 //! 技术栈：Rust + eframe/egui(glow) + 原始 Win32/DWM FFI + 系统托盘(tray-icon)?
 //! 交互：托盘小图标 ?弹出设置面板；关闭面??隐藏到托?/ 彻底退出?
 
@@ -24,6 +24,13 @@ use tray::{Tray, TrayAction};
 // 收起?/ 展开态的窗口尺寸（逻辑点）
 const W_COLLAPSED: f32 = 150.0;
 const W_COLLAPSED_MUSIC: f32 = 356.0;
+/// 收起态「待机表情」模式（无音乐）时的胶囊最小宽度（贴合表情画面，两端圆角）
+const W_COLLAPSED_FACE: f32 = 72.0;
+/// 待机表情名称（与 draw_robot_face 的 expr 编号一一对应）
+const FACES: [&str; 14] = [
+    "平静", "开心", "难过", "生气", "哭泣", "爱心眼", "害羞",
+    "思考", "眨眼", "酷", "亲亲", "自信", "困倦", "困惑",
+];
 const UPD_BADGE_W: f32 = 40.0;
 const UPD_BADGE_H: f32 = 15.3;
 const UPD_BADGE_GAP: f32 = 8.0;
@@ -293,6 +300,10 @@ struct Config {
     lyric_font: f32,
     /// 收起态频谱动画开关
     spectrum: bool,
+    /// 收起态且无音乐时的展示：0=时间，1=待机表情
+    collapsed_mode: u8,
+    /// 待机表情编号（0..FACES.len()-1）
+    idle_face: u8,
     /// 用户已在设置菜单看过更新的版本号（看过则收起态/设置角标不再出现）
     upd_seen_rail: String,
     /// 用户已点击过“软件更新”行的版本号（点过则行角标不再出现）
@@ -322,6 +333,8 @@ impl Default for Config {
             marquee: true,
             lyric_font: 13.0,
             spectrum: true,
+            collapsed_mode: 0,
+            idle_face: 1,
             upd_seen_rail: String::new(),
             upd_seen_row: String::new(),
             upd_checked_day: String::new(),
@@ -372,6 +385,8 @@ impl Config {
                     "radius" => cfg.radius = v.parse().unwrap_or(cfg.radius),
                     "show_seconds" => cfg.show_seconds = v == "1" || v == "true",
                     "show_date" => cfg.show_date = v == "1" || v == "true",
+                    "collapsed_mode" => cfg.collapsed_mode = v.parse().unwrap_or(cfg.collapsed_mode),
+                    "idle_face" => cfg.idle_face = v.parse().unwrap_or(cfg.idle_face),
                     "autostart" => cfg.autostart = v == "1" || v == "true",
                     "theme" => cfg.theme = Theme::from_str(v),
                     "lyric_shift_ms" => cfg.lyric_shift_ms = v.parse().unwrap_or(cfg.lyric_shift_ms),
@@ -394,7 +409,7 @@ impl Config {
 
     fn save(&self) {
         let text = format!(
-            "# MyIsle 配置\nposition={}\nx_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\nupd_seen_rail={}\nupd_seen_row={}\nupd_checked_day={}\n",
+            "# WinIsle 配置\nposition={}\nx_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\ncollapsed_mode={}\nidle_face={}\nupd_seen_rail={}\nupd_seen_row={}\nupd_checked_day={}\n",
             self.position.as_str(),
             self.x_frac,
             self.font,
@@ -415,6 +430,8 @@ impl Config {
             self.marquee as u8,
             self.lyric_font,
             self.spectrum as u8,
+            self.collapsed_mode,
+            self.idle_face,
             self.upd_seen_rail,
             self.upd_seen_row,
             self.upd_checked_day,
@@ -429,14 +446,18 @@ fn set_autostart(on: bool) {
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    // 清理旧品牌遗留的自启项，避免指向已不存在的旧 exe。
+    let _ = std::process::Command::new("reg")
+        .args(["delete", key, "/v", "MyIsle", "/f"])
+        .status();
     if on {
         let val = format!("\"{}\" --autostart", exe);
         let _ = std::process::Command::new("reg")
-            .args(["add", key, "/v", "MyIsle", "/t", "REG_SZ", "/d", &val, "/f"])
+            .args(["add", key, "/v", "WinIsle", "/t", "REG_SZ", "/d", &val, "/f"])
             .status();
     } else {
         let _ = std::process::Command::new("reg")
-            .args(["delete", key, "/v", "MyIsle", "/f"])
+            .args(["delete", key, "/v", "WinIsle", "/f"])
             .status();
     }
 }
@@ -651,7 +672,7 @@ enum Module {
     Weather,
 }
 
-/// 仅用于调试钩子 MYISLE_PAGE：启动后直接定位到某个视图。
+/// 仅用于调试钩子 WINISLE_PAGE：启动后直接定位到某个视图。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DbgView {
     Settings,
@@ -753,6 +774,8 @@ struct IslandApp {
     /// 无真实封面时的兜底封面贴图（按歌名哈希缓存，逐像素抗锯齿的圆形渐变）
     fallback_cover_tex: Option<(u64, egui::TextureHandle)>,
     upd_badge_tex: Option<egui::TextureHandle>,
+    /// 收起态待机表情动画帧贴图（1:1 复刻 Otto 原版逐帧动画，按 FACES 顺序懒加载）
+    face_frames: Vec<Option<Vec<egui::TextureHandle>>>,
     /// 兜底：SMTC 不可用时，从播放器窗口标题抓 “歌名 - 歌手”
     media_title_at: Instant,
     media_title_cache: Option<(String, String, String)>,
@@ -799,7 +822,9 @@ struct IslandApp {
     /// 音乐模块内的设置页是否展开（仅音乐模块有效）
     show_settings: bool,
     settings_scroll: f32,
-    /// 调试：MYISLE_PAGE=settings/schedule/weather 时启动即定位对应视图（用于截图验证）
+    /// 设置页滚动目标值（滚轮累加），实际 settings_scroll 每帧向它平滑逼近，实现丝滑滚动
+    settings_scroll_target: f32,
+    /// 调试：WINISLE_PAGE=settings/schedule/weather 时启动即定位对应视图（用于截图验证）
     dbg_page: Option<DbgView>,
     /// 左侧菜单选中项滑动动画：开始时刻 / 上一选中索引 / 上个模块
     rail_anim_at: Option<std::time::Instant>,
@@ -843,7 +868,7 @@ impl IslandApp {
             }
         });
         // SMTC 采用主线程非阻塞状态机（见 smtc.rs），无需后台线程。
-        let dbg_page = match std::env::var("MYISLE_PAGE").ok().as_deref() {
+        let dbg_page = match std::env::var("WINISLE_PAGE").ok().as_deref() {
             Some("settings") => Some(DbgView::Settings),
             Some("schedule") => Some(DbgView::Schedule),
             Some("weather") => Some(DbgView::Weather),
@@ -915,6 +940,7 @@ impl IslandApp {
             cover_tex: None,
             fallback_cover_tex: None,
         upd_badge_tex: None,
+            face_frames: (0..FACES.len()).map(|_| None).collect(),
             media_title_at: Instant::now() - Duration::from_secs(10),
             media_title_cache: None,
             player_running_cached: false,
@@ -943,6 +969,7 @@ impl IslandApp {
             active: Module::Music,
             show_settings: false,
             settings_scroll: 0.0,
+            settings_scroll_target: 0.0,
             dbg_page,
             rail_anim_at: None,
             rail_from: 0.0,
@@ -969,7 +996,7 @@ impl IslandApp {
                 self.hwnd = w.hwnd.get();
                 platform::make_island(self.hwnd);
                 platform::install_erase_guard(self.hwnd);
-                if std::env::var_os("MYISLE_LAYERED").is_some() {
+                if std::env::var_os("WINISLE_LAYERED").is_some() {
                     platform::set_layered(self.hwnd);
                 }
                 // 首次创建后先把客户区预填充成深色（背景刷已置空，避免首帧任何未定义底色）
@@ -987,7 +1014,7 @@ impl IslandApp {
             return;
         }
         let now = Instant::now();
-        if std::env::var_os("MYISLE_FORCE_EXPAND").is_some() {
+        if std::env::var_os("WINISLE_FORCE_EXPAND").is_some() {
             // 仅调试：无鼠标环境下强制展开（用于截图/自动化）
             self.target = 1.0;
             self.collapse_at = None;
@@ -1046,6 +1073,9 @@ impl IslandApp {
     /// 收起态宽度：有音乐时加宽到 W_COLLAPSED_MUSIC（放歌词/歌名），否则窄胶囊。
     /// 收起态前面可动态插入的额外元素总宽度（目前是「升级」胶囊，以后可继续加）。
     fn collapsed_extra_w(&self) -> f32 {
+        if self.face_mode_active() {
+            return 0.0;
+        }
         if self.show_time_update() {
             UPD_BADGE_W + 10.0
         } else {
@@ -1053,9 +1083,82 @@ impl IslandApp {
         }
     }
 
+    /// 收起态且无音乐、且用户选择了「表情」模式
+    fn face_mode_active(&self) -> bool {
+        self.cfg.collapsed_mode == 1 && self.music_amt < 0.01
+    }
+
+    /// 解析内嵌的表情动画二进制（MFAN）：返回每个表情 (w, h, 帧数, 像素起始偏移)。
+    fn face_anim_meta() -> Vec<(u16, u16, u16, usize)> {
+        const ANIM: &[u8] = include_bytes!("assets/faces_anim.bin");
+        let mut out = Vec::new();
+        if ANIM.len() < 8 || &ANIM[0..4] != b"MFAN" {
+            return out;
+        }
+        let count = u16::from_le_bytes([ANIM[6], ANIM[7]]) as usize;
+        let mut p = 8usize;
+        for _ in 0..count {
+            if p + 6 > ANIM.len() {
+                break;
+            }
+            let w = u16::from_le_bytes([ANIM[p], ANIM[p + 1]]);
+            let h = u16::from_le_bytes([ANIM[p + 2], ANIM[p + 3]]);
+            let fc = u16::from_le_bytes([ANIM[p + 4], ANIM[p + 5]]);
+            p += 6;
+            let off = p;
+            p += (w as usize) * (h as usize) * (fc as usize);
+            out.push((w, h, fc, off));
+        }
+        out
+    }
+
+    /// 懒加载指定表情的整段动画帧贴图（Otto 原版逐帧，绿字 + 透明底）。
+    fn ensure_face_frames(&mut self, ctx: &egui::Context, idx: usize) {
+        const ANIM: &[u8] = include_bytes!("assets/faces_anim.bin");
+        let metas = Self::face_anim_meta();
+        if self.face_frames.len() != metas.len() {
+            self.face_frames = (0..metas.len()).map(|_| None).collect();
+        }
+        if idx >= metas.len() || self.face_frames[idx].is_some() {
+            return;
+        }
+        let (w, h, fc, off) = metas[idx];
+        let (w, h, fc) = (w as usize, h as usize, fc as usize);
+        let stride = w * h;
+        let mut frames: Vec<egui::TextureHandle> = Vec::with_capacity(fc);
+        for f in 0..fc {
+            let base = off + f * stride;
+            if base + stride > ANIM.len() {
+                break;
+            }
+            let src = &ANIM[base..base + stride];
+            let mut rgba = Vec::with_capacity(stride * 4);
+            for &a in src {
+                rgba.push(126);
+                rgba.push(234);
+                rgba.push(182);
+                rgba.push(a);
+            }
+            let ci = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+            let tex = ctx.load_texture(
+                format!("face_fr_{}_{}", idx, f),
+                ci,
+                egui::TextureOptions::LINEAR,
+            );
+            frames.push(tex);
+        }
+        if !frames.is_empty() {
+            self.face_frames[idx] = Some(frames);
+        }
+    }
+
     fn collapsed_w(&self) -> f32 {
-        W_COLLAPSED
-            + (W_COLLAPSED_MUSIC - W_COLLAPSED) * self.music_amt.clamp(0.0, 1.0)
+        let base = if self.cfg.collapsed_mode == 1 {
+            W_COLLAPSED_FACE
+        } else {
+            W_COLLAPSED
+        };
+        base + (W_COLLAPSED_MUSIC - base) * self.music_amt.clamp(0.0, 1.0)
             + self.collapsed_extra_w()
     }
 
@@ -1454,7 +1557,7 @@ impl IslandApp {
         if self.hwnd == 0 {
             return;
         }
-        if std::env::var_os("MYISLE_NO_REGION").is_some() {
+        if std::env::var_os("WINISLE_NO_REGION").is_some() {
             if self.region != (0, 0, 0, 0, 0) {
                 platform::clear_window_region(self.hwnd);
                 self.region = (0, 0, 0, 0, 0);
@@ -1672,6 +1775,35 @@ impl IslandApp {
                     );
                     self.paint_update_pill(&painter, br, am);
                 }
+            } else if self.face_mode_active() {
+                // 无音乐 + 表情模式：播放 Otto 原版逐帧动画
+                let centered_a = (a as f32 * (1.0 - amt)) as u8;
+                let idx = self.cfg.idle_face as usize;
+                self.ensure_face_frames(ui.ctx(), idx);
+                let metas = Self::face_anim_meta();
+                let (aspect, fc) = metas
+                    .get(idx)
+                    .map(|(w, h, fc, _)| (*w as f32 / (*h).max(1) as f32, *fc as usize))
+                    .unwrap_or((1.0, 1));
+                let frame = (((t * 1000.0) / 80.0) as usize) % fc.max(1);
+                let tex = self
+                    .face_frames
+                    .get(idx)
+                    .and_then(|o| o.as_ref())
+                    .and_then(|v| v.get(frame));
+                let max_h = (pill.height() * 1.5).max(10.0);
+                let fh = max_h.min((pill.width() - 12.0).max(8.0) / aspect.max(0.2));
+                draw_robot_face(
+                    &painter,
+                    egui::pos2(pill.center().x, pill.center().y),
+                    fh,
+                    centered_a,
+                    self.cfg.idle_face,
+                    t,
+                    tex,
+                );
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(40));
             } else {
                 let mut s = format!("{:02}:{:02}", st.wHour, st.wMinute);
                 if self.cfg.show_seconds {
@@ -2445,6 +2577,7 @@ impl IslandApp {
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if resp.clicked() && !self.show_settings {
                 self.settings_scroll = 0.0;
+                self.settings_scroll_target = 0.0;
                 self.show_settings = true;
                 self.mark_upd_seen_rail();
                 if self.upd_ver.is_none() && !self.upd_checking {
@@ -2533,7 +2666,7 @@ impl IslandApp {
         // 与返回按钮一致：无底色、无描边，只留齿轮图标，悬停不高亮
         let col = egui::Color32::from_rgba_unmultiplied(170, 178, 195, a);
         painter.text(c, egui::Align2::CENTER_CENTER, "\u{E713}", icon_font(15.0), col); // Settings 齿轮
-        if vis > 0.5 && resp.clicked() { self.settings_scroll = 0.0; self.show_settings = true; self.mark_upd_seen_rail(); }
+        if vis > 0.5 && resp.clicked() { self.settings_scroll = 0.0; self.settings_scroll_target = 0.0; self.show_settings = true; self.mark_upd_seen_rail(); }
     }
 
     /// 后台检查更新（不阻塞 UI）。
@@ -2637,6 +2770,12 @@ impl IslandApp {
     fn draw_settings_page(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, content: egui::Rect, e: f32, vis: f32) {
         let vis = vis.clamp(0.0, 1.0);
         let full = content;
+        // 待机表情网格需要所有表情的动画帧，提前全部加载
+        if self.cfg.collapsed_mode == 1 {
+            for i in 0..FACES.len() {
+                self.ensure_face_frames(ui.ctx(), i);
+            }
+        }
         // 用与岛体一致的底色做遮罩：随 vis 淡入，盖住下方的音乐页，实现“展开”过渡
         let clip_p = painter.with_clip_rect(full);
         let painter: &egui::Painter = &clip_p;
@@ -2671,19 +2810,36 @@ impl IslandApp {
         let row_h = 30.0f32;
         let label_h = 18.0f32;
         let group_gap = 12.0f32;
+        // 待机表情：可视化点选网格（7 列 × 2 行，每个格子播放对应表情动画）
+        let tile_h = 46.0f32;
+        let tile_gap = 5.0f32;
+        let grid_h = tile_h * 2.0 + tile_gap;
         // 设置内容区可滚动（设置项变多时自动出现滚动）
         let list_top = content.top() + header_h;
         let list_bottom = content.bottom() - CONTENT_PAD_B;
         let view_h = (list_bottom - list_top).max(1.0);
-        let total_h = label_h * 2.0 + group_gap + row_h * 3.0;
+        let face_rows = if self.cfg.collapsed_mode == 1 { 1.0 } else { 0.0 };
+        let mut total_h = label_h * 3.0 + group_gap * 2.0 + row_h * (4.0 + face_rows);
+        if self.cfg.collapsed_mode == 1 {
+            total_h += grid_h;
+        }
         let max_scroll = (total_h - view_h).max(0.0);
+        // 滚轮只累加“目标值”，再让实际偏移每帧平滑逼近，形成丝滑的过渡
         if let Some(ph) = ui.ctx().pointer_hover_pos() {
             if full.contains(ph) && max_scroll > 0.0 {
                 let d = ui.input(|i| i.raw_scroll_delta.y);
-                self.settings_scroll = (self.settings_scroll - d).clamp(0.0, max_scroll);
+                self.settings_scroll_target -= d;
             }
         }
+        self.settings_scroll_target = self.settings_scroll_target.clamp(0.0, max_scroll);
+        // 指数平滑（时间常数 ~70ms），越接近目标越慢，收尾自然
+        let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.05);
+        let k = 1.0 - (-dt / 0.07).exp();
+        self.settings_scroll += (self.settings_scroll_target - self.settings_scroll) * k;
         self.settings_scroll = self.settings_scroll.clamp(0.0, max_scroll);
+        if (self.settings_scroll_target - self.settings_scroll).abs() > 0.25 {
+            ui.ctx().request_repaint();
+        }
         let list_rect = egui::Rect::from_min_max(
             egui::pos2(full.left(), list_top),
             egui::pos2(full.right(), list_bottom),
@@ -2698,7 +2854,35 @@ impl IslandApp {
         };
         let tg = |y: f32| egui::Rect::from_min_size(egui::pos2(right - 32.0, y + row_h * 0.5 - 8.0), egui::vec2(32.0, 16.0));
 
+        // 分组：收起态
+        painter.text(egui::pos2(left, y), egui::Align2::LEFT_TOP, "收起态", egui::FontId::proportional(13.0), muted2);
+        y += label_h;
+        // 无音乐时展示：时间 / 待机表情
+        row_label(painter, y, "无音乐时", ink);
+        {
+            let seg = egui::Rect::from_min_max(egui::pos2(right - 92.0, y + 5.0), egui::pos2(right, y + row_h - 5.0));
+            if let Some(v) = Self::draw_segment(ui, painter, seg, &["时间", "表情"], self.cfg.collapsed_mode as usize, ui.id().with("seg_collapsed"), accent, a) {
+                self.cfg.collapsed_mode = v as u8;
+                changed = true;
+            }
+        }
+        y += row_h;
+        if self.cfg.collapsed_mode == 1 {
+            // 待机表情：可视化点选网格（每个格子实时播放对应表情动画，点击即可选中）
+            row_label(painter, y, "待机表情", ink);
+            y += row_h;
+            let area = egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(right - left, grid_h));
+            let tsec = ui.input(|i| i.time);
+            if let Some(v) = Self::draw_face_grid(ui, painter, area, self.cfg.idle_face, ui.id().with("face_grid"), a, accent, &self.face_frames, tsec) {
+                self.cfg.idle_face = v;
+                changed = true;
+            }
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(80));
+            y += grid_h;
+        }
+
         // 分组：歌词
+        y += group_gap;
         painter.text(egui::pos2(left, y), egui::Align2::LEFT_TOP, "歌词", egui::FontId::proportional(13.0), muted2);
         y += label_h;
         // 换行滚动动画
@@ -2788,14 +2972,14 @@ impl IslandApp {
                 egui::pos2(full.right() - 5.0, list_top),
                 egui::pos2(full.right() - 2.0, list_bottom),
             );
-            painter.rect_filled(track, 1.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 16));
+            painter.rect_filled(track, 1.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (a as f32 * 0.04) as u8));
             let frac = (view_h / total_h).clamp(0.0, 1.0);
             let th = (view_h * frac).max(24.0).min(view_h);
             let ty = list_top + (view_h - th) * (self.settings_scroll / max_scroll);
             painter.rect_filled(
                 egui::Rect::from_min_max(egui::pos2(track.left(), ty), egui::pos2(track.right(), ty + th)),
                 1.5,
-                egui::Color32::from_rgba_unmultiplied(200, 210, 224, 90),
+                egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), (a as f32 * 0.45) as u8),
             );
         }
 
@@ -2846,6 +3030,164 @@ impl IslandApp {
         None
     }
 
+    /// 分段选择控件（如「时间 | 表情」）。高亮块在选项间平滑滑动，文案颜色随之渐变。
+    /// 返回 Some(新索引) 表示被点击切换。
+    fn draw_segment(ui: &mut egui::Ui, painter: &egui::Painter, rect: egui::Rect, opts: &[&str], sel: usize, id: egui::Id, accent: egui::Color32, a: u8) -> Option<usize> {
+        let resp = ui.interact(rect, id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let n = opts.len().max(1);
+        let seg_w = rect.width() / n as f32;
+        // 高亮块位置动画（在选项之间平滑滑动）
+        let target = sel as f32;
+        let pos = ui.ctx().animate_value_with_time(id.with("seg_pos"), target, 0.20);
+        // 轨道：用左侧菜单的深色(22,23,28)
+        painter.rect_filled(rect, rect.height() * 0.5, egui::Color32::from_rgba_unmultiplied(22, 23, 28, a));
+        // 高亮块（随动画移动）
+        let hx = rect.left() + seg_w * pos;
+        let hr = egui::Rect::from_min_max(
+            egui::pos2(hx + 1.0, rect.top() + 1.0),
+            egui::pos2(hx + seg_w - 1.0, rect.bottom() - 1.0),
+        );
+        painter.rect_filled(hr, hr.height() * 0.5, egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), a));
+        let lerp_u = |x: u8, y: u8, t: f32| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+        let mut out = None;
+        for (i, label) in opts.iter().enumerate() {
+            // 文案颜色：按高亮块覆盖比例在「未选中/选中」之间渐变
+            let w = (1.0 - (pos - i as f32).abs()).clamp(0.0, 1.0);
+            let tc = egui::Color32::from_rgba_unmultiplied(
+                lerp_u(178, 16, w),
+                lerp_u(186, 26, w),
+                lerp_u(202, 22, w),
+                a,
+            );
+            let c = egui::pos2(rect.left() + seg_w * (i as f32 + 0.5), rect.center().y);
+            painter.text(c, egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(12.0), tc);
+            if resp.clicked() {
+                if let Some(p) = resp.interact_pointer_pos() {
+                    let sr = egui::Rect::from_min_max(
+                        egui::pos2(rect.left() + seg_w * i as f32, rect.top()),
+                        egui::pos2(rect.left() + seg_w * (i + 1) as f32, rect.bottom()),
+                    );
+                    if sr.contains(p) { out = Some(i); }
+                }
+            }
+        }
+        if (pos - target).abs() > 0.001 { ui.ctx().request_repaint(); }
+        out
+    }
+
+    /// 待机表情选择器：左侧实时预览 + 名称 + 左右箭头。返回 Some(新编号)。
+    fn draw_face_stepper(ui: &mut egui::Ui, painter: &egui::Painter, rect: egui::Rect, cur: u8, id: egui::Id, a: u8, face_frames: &[Option<Vec<egui::TextureHandle>>]) -> Option<u8> {
+        let resp = ui.interact(rect, id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let n = FACES.len();
+        let cur_i = (cur as usize).min(n - 1);
+        let tex = face_frames.get(cur_i).and_then(|o| o.as_ref()).and_then(|v| v.get(0));
+        let fh = (rect.height() - 6.0).min(16.0).max(8.0);
+        let fw = match tex {
+            Some(t) => {
+                let s = t.size_vec2();
+                fh * (s.x / s.y.max(1.0))
+            }
+            None => fh,
+        };
+        let pv = egui::pos2(rect.left() + fw * 0.5 + 1.0, rect.center().y);
+        draw_robot_face(painter, pv, fh, a, cur_i as u8, 0.0, tex);
+        painter.text(
+            egui::pos2(rect.left() + fw + 8.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            FACES[cur_i],
+            egui::FontId::proportional(12.5),
+            egui::Color32::from_rgba_unmultiplied(230, 234, 242, a),
+        );
+        let arrow_c = egui::Color32::from_rgba_unmultiplied(150, 158, 175, a);
+        let lz = egui::Rect::from_center_size(egui::pos2(rect.right() - 36.0, rect.center().y), egui::vec2(22.0, rect.height()));
+        let rz = egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(22.0, rect.height()));
+        painter.text(lz.center(), egui::Align2::CENTER_CENTER, "\u{2039}", egui::FontId::proportional(17.0), arrow_c);
+        painter.text(rz.center(), egui::Align2::CENTER_CENTER, "\u{203A}", egui::FontId::proportional(17.0), arrow_c);
+        let mut out = None;
+        if resp.clicked() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                if lz.contains(p) {
+                    out = Some(((cur_i + n - 1) % n) as u8);
+                } else if rz.contains(p) {
+                    out = Some(((cur_i + 1) % n) as u8);
+                }
+            }
+        }
+        out
+    }
+
+    /// 待机表情：可视化点选网格（7 列 × 2 行）。每个格子实时播放该表情的逐帧动画，
+    /// 点击选中并高亮。返回 Some(新编号)。
+    fn draw_face_grid(
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        area: egui::Rect,
+        cur: u8,
+        id: egui::Id,
+        a: u8,
+        accent: egui::Color32,
+        face_frames: &[Option<Vec<egui::TextureHandle>>],
+        t: f64,
+    ) -> Option<u8> {
+        let n = FACES.len();
+        let cols = 7usize;
+        let rows = (n + cols - 1) / cols;
+        let gap = 5.0f32;
+        let cell_w = area.width() / cols as f32;
+        let cell_h = (area.height() - (rows as f32 - 1.0) * gap) / rows as f32;
+        let metas = Self::face_anim_meta();
+        let mut out = None;
+        for i in 0..n {
+            let r = i / cols;
+            let c = i % cols;
+            let trect = egui::Rect::from_min_size(
+                egui::pos2(area.left() + c as f32 * cell_w + gap * 0.5, area.top() + r as f32 * (cell_h + gap)),
+                egui::vec2(cell_w - gap, cell_h),
+            );
+            let resp = ui
+                .interact(trect, id.with(i), egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            let sel = i == cur as usize;
+            // 背景：统一用左侧菜单深色(22,23,28)；选中只靠绿色描边表示，中间不加浅灰层
+            painter.rect_filled(trect, 8.0, egui::Color32::from_rgba_unmultiplied(22, 23, 28, a));
+            if sel {
+                painter.rect_stroke(
+                    trect,
+                    egui::CornerRadius::same(8),
+                    egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), a)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            // 逐帧动画
+            let fc = metas.get(i).map(|m| m.2 as usize).unwrap_or(1).max(1);
+            let frame = (((t * 1000.0) / 80.0) as usize) % fc;
+            let tex = face_frames
+                .get(i)
+                .and_then(|o| o.as_ref())
+                .and_then(|v| v.get(frame));
+            let fh = (cell_h - 8.0).clamp(16.0, 40.0);
+            let cy = trect.top() + 2.0 + fh * 0.5;
+            draw_robot_face(painter, egui::pos2(trect.center().x, cy), fh, a, i as u8, 0.0, tex);
+            // 名称
+            let lcol = if sel {
+                egui::Color32::from_rgba_unmultiplied(235, 238, 245, a)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(150, 158, 175, a)
+            };
+            painter.text(
+                egui::pos2(trect.center().x, trect.bottom() - 5.0),
+                egui::Align2::CENTER_CENTER,
+                FACES[i],
+                egui::FontId::proportional(9.0),
+                lcol,
+            );
+            if resp.clicked() {
+                out = Some(i as u8);
+            }
+        }
+        out
+    }
+
     // ---------------- 设置面板 ----------------
     fn settings_ui(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
@@ -2855,6 +3197,8 @@ impl IslandApp {
             return;
         }
         apply_style(ctx, true);
+        let face_idx0 = self.cfg.idle_face as usize;
+        self.ensure_face_frames(ctx, face_idx0);
         let c = palette(true);
         let focus = self.focus_settings;
         let mut do_hide = false;
@@ -2864,7 +3208,7 @@ impl IslandApp {
         // 无系统标题栏、可拖动、自绘；圆角交给 Win11 DWM，避免透明窗口四角发黑?
         let first = !self.settings_shown;
         let mut builder = egui::ViewportBuilder::default()
-            .with_title("MyIsle 设置")
+            .with_title("WinIsle 设置")
             .with_decorations(false)
             .with_resizable(false)
             .with_inner_size([440.0, 320.0])
@@ -2876,7 +3220,7 @@ impl IslandApp {
         }
 
         ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("myisle_settings"),
+            egui::ViewportId::from_hash_of("winisle_settings"),
             builder,
             |ctx, _class| {
                 if ctx.input(|i| i.viewport().close_requested()) {
@@ -2899,7 +3243,7 @@ impl IslandApp {
                         p.text(
                             egui::pos2(rect.min.x + 32.0, rect.min.y + 26.0),
                             egui::Align2::LEFT_CENTER,
-                            "MyIsle",
+                            "WinIsle",
                             egui::FontId::proportional(15.0),
                             c.text,
                         );
@@ -2908,7 +3252,7 @@ impl IslandApp {
                             egui::pos2(rect.min.x, rect.min.y),
                             egui::pos2(rect.max.x - 48.0, rect.min.y + 48.0),
                         );
-                        let drag = ui.interact(header, egui::Id::new("myisle_title_drag"), egui::Sense::drag());
+                        let drag = ui.interact(header, egui::Id::new("winisle_title_drag"), egui::Sense::drag());
                         if drag.drag_started() {
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                         }
@@ -2917,7 +3261,7 @@ impl IslandApp {
                             egui::pos2(rect.max.x - 42.0, rect.min.y + 12.0),
                             egui::vec2(30.0, 30.0),
                         );
-                        let cresp = ui.interact(btn, egui::Id::new("myisle_close"), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let cresp = ui.interact(btn, egui::Id::new("winisle_close"), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
                         if cresp.hovered() {
                             p.rect_filled(btn, egui::CornerRadius::same(8), egui::Color32::from_rgb(238, 238, 240));
                         }
@@ -2935,7 +3279,7 @@ impl IslandApp {
                         p.text(
                             egui::pos2(cx, rect.min.y + 148.0),
                             egui::Align2::CENTER_CENTER,
-                            "MyIsle",
+                            "WinIsle",
                             egui::FontId::proportional(34.0),
                             c.text,
                         );
@@ -2957,7 +3301,7 @@ impl IslandApp {
 
                 // 关闭询问 —?应用内小模态（点空白处 / Esc 可取消）
                 if confirm_open {
-                    let resp = egui::Modal::new(egui::Id::new("myisle_confirm_modal"))
+                    let resp = egui::Modal::new(egui::Id::new("winisle_confirm_modal"))
                         .frame(
                             egui::Frame::NONE
                                 .fill(c.bg)
@@ -2968,7 +3312,7 @@ impl IslandApp {
                         .show(ctx, |ui| {
                             ui.set_width(240.0);
                             ui.vertical_centered(|ui| {
-                                ui.label(egui::RichText::new("关闭 MyIsle").size(16.0).strong().color(c.text));
+                                ui.label(egui::RichText::new("关闭 WinIsle").size(16.0).strong().color(c.text));
                                 ui.add_space(6.0);
                                 ui.label(egui::RichText::new("隐藏到托盘，还是彻底退出？").size(12.0).color(c.muted));
                                 ui.add_space(14.0);
@@ -3013,7 +3357,7 @@ impl IslandApp {
 
         // ?Win11 DWM 给这个窗口加原生圆角（彻底去掉四角发黑）
         if !self.settings_shown {
-            let h = platform::find_process_window("MyIsle 设置");
+            let h = platform::find_process_window("WinIsle 设置");
             if h != 0 {
                 platform::set_round_corners(h);
                 platform::reveal_centered(h);
@@ -3111,8 +3455,8 @@ impl eframe::App for IslandApp {
                     .store(false, std::sync::atomic::Ordering::Relaxed);
             }
         }
-        // 调试：MYISLE_DEMO="歌名|歌手" 时注入一条虚拟曲目，用于无播放器环境验证界面/动画
-        if let Ok(spec) = std::env::var("MYISLE_DEMO") {
+        // 调试：WINISLE_DEMO="歌名|歌手" 时注入一条虚拟曲目，用于无播放器环境验证界面/动画
+        if let Ok(spec) = std::env::var("WINISLE_DEMO") {
             let mut it = spec.splitn(2, '|');
             let t = it.next().unwrap_or("Demo").to_string();
             let ar = it.next().unwrap_or("Demo Artist").to_string();
@@ -3127,7 +3471,7 @@ impl eframe::App for IslandApp {
             self.from_smtc = false;
             self.ui_playing = true;
         }
-        if let Ok(long) = std::env::var("MYISLE_LONG") {
+        if let Ok(long) = std::env::var("WINISLE_LONG") {
             // 调试：注入一条超长“歌词”用于检查收起态跑马灯/渐绿渲染
             self.lyr_lines = vec![lyrics::LrcLine { t: 0.0, text: long, segs: Vec::new() }];
             self.lyr_key = "LONG".into();
@@ -3236,6 +3580,10 @@ impl eframe::App for IslandApp {
                 self.music_amt = target_amt;
             } else {
                 ctx.request_repaint();
+            }
+            // 调试钩子：强制按“无音乐”渲染收起态（用于截图表情）
+            if std::env::var("WINISLE_FACE").is_ok() {
+                self.music_amt = 0.0;
             }
             // 淡出结束后再真正清掉歌词/封面，避免淡出过程中文字突然变成“正在播放”
             if self.music_amt < 0.02 && self.music.title.is_empty() {
@@ -3500,9 +3848,9 @@ impl eframe::App for IslandApp {
             }
         }
 
-        // 调试：MYISLE_FAKE_LYRICS=1（配合 MYISLE_DEMO）注入一组按时间推进的假歌词，
+        // 调试：WINISLE_FAKE_LYRICS=1（配合 WINISLE_DEMO）注入一组按时间推进的假歌词，
         // 用于无播放器环境预览收起态“上滚”动画。
-        if std::env::var_os("MYISLE_FAKE_LYRICS").is_some() && self.lyr_lines.len() < 2 {
+        if std::env::var_os("WINISLE_FAKE_LYRICS").is_some() && self.lyr_lines.len() < 2 {
             let demo = [
                 "第一句 风继续吹不忍远离",
                 "第二句 心里极渴望希望留下伴着你",
@@ -3570,7 +3918,7 @@ impl eframe::App for IslandApp {
         let _pf_t_state = std::time::Instant::now();
         self.handle_drag(ctx);
         self.drive_animation(ctx);
-        // 调试：展开后若指定了 MYISLE_PAGE，定位对应视图
+        // 调试：展开后若指定了 WINISLE_PAGE，定位对应视图
         if let Some(p) = self.dbg_page {
             if self.expanded > 0.9 {
                 match p {
@@ -3629,7 +3977,7 @@ impl eframe::App for IslandApp {
             || self.upd_busy
             || pointer_active;
         let ms = if animating { 16 } else { 200 };
-        if std::env::var_os("MYISLE_PERF").is_some() {
+        if std::env::var_os("WINISLE_PERF").is_some() {
             let el = _pf_t0.elapsed().as_secs_f32() * 1000.0;
             let (dt, udt) = ctx.input(|i| (i.stable_dt, i.unstable_dt));
             if el > 12.0 || dt > 0.020 {
@@ -3671,6 +4019,305 @@ fn chrono_like_now() -> String {
         .unwrap_or_default();
     let s = d.as_secs() % 86400;
     format!("{:02}:{:02}:{:02}.{:03}", s / 3600, (s % 3600) / 60, s % 60, d.subsec_millis())
+}
+
+/// 收起态「待机表情」：简洁的机器人脸（两只眼睛 + 一张嘴），带眨眼/呼吸微动，
+/// 用 egui 基本图元绘制，颜色统一用主题绿以呼应整体风格。expr 见 FACES。
+fn draw_robot_face(painter: &egui::Painter, c: egui::Pos2, h: f32, a: u8, expr: u8, t: f64, tex: Option<&egui::TextureHandle>) {
+    if a == 0 || h <= 1.0 {
+        return;
+    }
+    let bob = ((t * 1.7).sin() as f32) * h * 0.028;
+    // 有贴图则 1:1 直接绘制 Otto 原版像素表情（绿字 + 透明底），保持原始比例
+    if let Some(tx) = tex {
+        let s = tx.size_vec2();
+        let fw = h * (s.x / s.y.max(1.0));
+        let center = egui::pos2(c.x, c.y);
+        let rect = egui::Rect::from_center_size(center, egui::vec2(fw, h));
+        painter.image(
+            tx.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, a),
+        );
+        return;
+    }
+    let pi = std::f32::consts::PI;
+    let col = egui::Color32::from_rgba_unmultiplied(126, 234, 182, a);
+    let cy = c.y + bob;
+    let eye_dx = h * 0.26;
+    let eye_cy = cy - h * 0.10;
+    let eye_w = h * 0.185;
+    let eye_h = h * 0.26;
+    let lw = (h * 0.085).max(1.4);
+    let bp = ((t * 0.30) % 1.0) as f32;
+    let blink = bp > 0.94;
+    let my = cy + h * 0.24;
+
+    // 圆角竖眼（含眨眼）；直接用 w*0.5 圆角成胶囊
+    let round_open = |dx: f32, w: f32, hh: f32| {
+        if blink {
+            let r = egui::Rect::from_center_size(
+                egui::pos2(c.x + dx, eye_cy),
+                egui::vec2(w * 1.9, (h * 0.10).max(1.5)),
+            );
+            painter.rect_filled(r, (h * 0.05).max(1.0), col);
+        } else {
+            let r = egui::Rect::from_center_size(egui::pos2(c.x + dx, eye_cy), egui::vec2(w, hh));
+            painter.rect_filled(r, w * 0.5, col);
+        }
+    };
+    // 实心半圆眼：round_top=true 圆顶平底(开心眯眼)；false 平顶圆底(难过垂眼)
+    let half_eye = |dx: f32, w: f32, hh: f32, round_top: bool| {
+        let n = 18;
+        let mut pts: Vec<egui::Pos2> = Vec::with_capacity(n + 1);
+        for i in 0..=n {
+            let ang = pi * (i as f32) / (n as f32);
+            let x = c.x + dx + w * 0.5 * ang.cos();
+            let sy = if round_top { 1.0 } else { -1.0 };
+            let y = eye_cy - hh * ang.sin() * sy;
+            pts.push(egui::pos2(x, y));
+        }
+        painter.add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
+    };
+    // 旋转椭圆（生气斜眼）
+    let ellipse = |cx: f32, cyy: f32, w: f32, hh: f32, ang: f32| {
+        let n = 22;
+        let mut pts: Vec<egui::Pos2> = Vec::with_capacity(n);
+        for i in 0..n {
+            let a2 = 2.0 * pi * (i as f32) / (n as f32);
+            let x0 = w * 0.5 * a2.cos();
+            let y0 = hh * 0.5 * a2.sin();
+            let xr = x0 * ang.cos() - y0 * ang.sin();
+            let yr = x0 * ang.sin() + y0 * ang.cos();
+            pts.push(egui::pos2(cx + xr, cyy + yr));
+        }
+        painter.add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
+    };
+    // 爱心（两圆 + 三角，避免凹多边形填充问题）
+    let heart = |cx: f32, cyy: f32, s: f32| {
+        let r = s * 0.30;
+        painter.circle_filled(egui::pos2(cx - s * 0.24, cyy - s * 0.16), r, col);
+        painter.circle_filled(egui::pos2(cx + s * 0.24, cyy - s * 0.16), r, col);
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(cx - s * 0.52, cyy - s * 0.02),
+                egui::pos2(cx + s * 0.52, cyy - s * 0.02),
+                egui::pos2(cx, cyy + s * 0.58),
+            ],
+            col,
+            egui::Stroke::NONE,
+        ));
+    };
+    // 弧线：depth>0 微笑(U)；depth<0 皱眉(∩)；ycen 为基线
+    let arc = |w: f32, depth: f32, ycen: f32| {
+        let n = 14;
+        let mut pts = Vec::with_capacity(n + 1);
+        for i in 0..=n {
+            let fx = i as f32 / n as f32;
+            let x = -w * 0.5 + w * fx;
+            let u = (x / (w * 0.5)).clamp(-1.0, 1.0);
+            let y = depth * (1.0 - u * u);
+            pts.push(egui::pos2(c.x + x, ycen + y));
+        }
+        painter.add(egui::Shape::line(pts, egui::Stroke::new(lw, col)));
+    };
+    let flat_mouth = |w: f32| {
+        let r = egui::Rect::from_center_size(
+            egui::pos2(c.x, my),
+            egui::vec2(w, (h * 0.09).max(1.4)),
+        );
+        painter.rect_filled(r, h * 0.045, col);
+    };
+    // 闭眼弧线（up=true 上弯 ‿ 的反向 → 拱形）
+    let closed_eye_line = |dx: f32, w: f32, up: bool| {
+        let n = 12;
+        let mut pts = Vec::with_capacity(n + 1);
+        for i in 0..=n {
+            let fx = i as f32 / n as f32;
+            let x = -w * 0.5 + w * fx;
+            let u = (x / (w * 0.5)).clamp(-1.0, 1.0);
+            let y = (1.0 - u * u) * h * 0.10 * if up { -1.0 } else { 1.0 };
+            pts.push(egui::pos2(c.x + dx + x, eye_cy + y));
+        }
+        painter.add(egui::Shape::line(pts, egui::Stroke::new(lw, col)));
+    };
+
+    match expr {
+        // 0 平静：两只圆眼 + 小扁嘴
+        0 => {
+            round_open(-eye_dx, eye_w, eye_h);
+            round_open(eye_dx, eye_w, eye_h);
+            flat_mouth(h * 0.30);
+        }
+        // 1 开心：眯眼笑（圆顶）+ 大笑弧
+        1 => {
+            half_eye(-eye_dx, eye_w * 1.5, eye_h * 0.95, true);
+            half_eye(eye_dx, eye_w * 1.5, eye_h * 0.95, true);
+            arc(h * 0.54, h * 0.25, my);
+        }
+        // 2 难过：垂眼（平顶圆底）+ 皱眉
+        2 => {
+            half_eye(-eye_dx, eye_w * 1.4, eye_h * 0.82, false);
+            half_eye(eye_dx, eye_w * 1.4, eye_h * 0.82, false);
+            arc(h * 0.40, -h * 0.12, my + h * 0.03);
+        }
+        // 3 生气：斜眼 + 怒符 + 小扁嘴
+        3 => {
+            ellipse(c.x - eye_dx, eye_cy, eye_w * 1.5, eye_h * 0.78, 0.5);
+            ellipse(c.x + eye_dx, eye_cy, eye_w * 1.5, eye_h * 0.78, -0.5);
+            let gx = c.x + eye_dx + eye_w * 1.5;
+            let gy = eye_cy - eye_h * 1.15;
+            let s = h * 0.05;
+            painter.add(egui::Shape::line(
+                vec![egui::pos2(gx - s, gy - s), egui::pos2(gx + s, gy + s)],
+                egui::Stroke::new(lw * 0.7, col),
+            ));
+            painter.add(egui::Shape::line(
+                vec![egui::pos2(gx + s, gy - s), egui::pos2(gx - s, gy + s)],
+                egui::Stroke::new(lw * 0.7, col),
+            ));
+            flat_mouth(h * 0.26);
+        }
+        // 4 哭泣：垂眼 + 泪流 + 皱眉
+        4 => {
+            half_eye(-eye_dx, eye_w * 1.3, eye_h * 0.78, false);
+            half_eye(eye_dx, eye_w * 1.3, eye_h * 0.78, false);
+            for side in [-1.0f32, 1.0] {
+                let tx = c.x + side * eye_dx;
+                let mut yv = eye_cy + eye_h * 0.85;
+                for _ in 0..3 {
+                    painter.add(egui::Shape::line(
+                        vec![egui::pos2(tx, yv), egui::pos2(tx, yv + h * 0.06)],
+                        egui::Stroke::new(lw * 0.7, col),
+                    ));
+                    yv += h * 0.11;
+                }
+                painter.circle_filled(egui::pos2(tx, yv + h * 0.01), h * 0.035, col);
+            }
+            arc(h * 0.38, -h * 0.11, my + h * 0.04);
+        }
+        // 5 爱心眼：心形眼 + 微笑
+        5 => {
+            heart(c.x - eye_dx, eye_cy, eye_w * 2.5);
+            heart(c.x + eye_dx, eye_cy, eye_w * 2.5);
+            arc(h * 0.44, h * 0.14, my);
+        }
+        // 6 害羞：圆眼 + 腮红斜线 + 汗滴 + 微笑
+        6 => {
+            round_open(-eye_dx, eye_w, eye_h);
+            round_open(eye_dx, eye_w, eye_h);
+            for side in [-1.0f32, 1.0] {
+                let bx = c.x + side * (eye_dx + eye_w * 0.95);
+                for k in 0..3 {
+                    let o = (k as f32 - 1.0) * h * 0.05;
+                    painter.add(egui::Shape::line(
+                        vec![
+                            egui::pos2(bx - h * 0.04, eye_cy + eye_h * 0.55 + o + h * 0.04),
+                            egui::pos2(bx + h * 0.02, eye_cy + eye_h * 0.55 + o - h * 0.02),
+                        ],
+                        egui::Stroke::new(lw * 0.6, col),
+                    ));
+                }
+            }
+            let sx = c.x + eye_dx + eye_w * 0.8;
+            let sy = eye_cy - eye_h * 1.1;
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(sx, sy - h * 0.07),
+                    egui::pos2(sx - h * 0.04, sy + h * 0.02),
+                    egui::pos2(sx + h * 0.04, sy + h * 0.02),
+                ],
+                col,
+                egui::Stroke::NONE,
+            ));
+            painter.circle_filled(egui::pos2(sx, sy + h * 0.03), h * 0.04, col);
+            arc(h * 0.40, h * 0.16, my);
+        }
+        // 7 思考：一大一小眼 + 小扁嘴
+        7 => {
+            round_open(-eye_dx, eye_w * 1.2, eye_h);
+            painter.circle_filled(
+                egui::pos2(c.x + eye_dx + h * 0.03, eye_cy - h * 0.04),
+                eye_w * 0.7,
+                col,
+            );
+            flat_mouth(h * 0.24);
+        }
+        // 8 眨眼：左眼闭 + 右眼圆 + 微笑
+        8 => {
+            closed_eye_line(-eye_dx, eye_w * 1.7, true);
+            round_open(eye_dx, eye_w, eye_h);
+            arc(h * 0.42, h * 0.15, my);
+        }
+        // 9 酷：墨镜 + 淡笑
+        9 => {
+            let lens_w = eye_w * 1.7;
+            let lens_h = eye_h * 0.95;
+            for side in [-1.0f32, 1.0] {
+                let r = egui::Rect::from_center_size(
+                    egui::pos2(c.x + side * eye_dx, eye_cy),
+                    egui::vec2(lens_w, lens_h),
+                );
+                painter.rect_filled(r, h * 0.055, col);
+            }
+            let br = egui::Rect::from_center_size(
+                egui::pos2(c.x, eye_cy - lens_h * 0.18),
+                egui::vec2((eye_dx * 2.0 - lens_w).max(1.0), h * 0.05),
+            );
+            painter.rect_filled(br, h * 0.02, col);
+            arc(h * 0.30, h * 0.07, my);
+        }
+        // 10 亲亲：弯眼 + 嘟嘴 + 小爱心
+        10 => {
+            closed_eye_line(-eye_dx, eye_w * 1.7, true);
+            closed_eye_line(eye_dx, eye_w * 1.7, true);
+            painter.circle_filled(egui::pos2(c.x, my), h * 0.055, col);
+            heart(c.x + h * 0.30, my - h * 0.02, h * 0.18);
+        }
+        // 11 自信：半眯眼 + 淡笑
+        11 => {
+            half_eye(-eye_dx, eye_w * 1.5, eye_h * 0.55, false);
+            half_eye(eye_dx, eye_w * 1.5, eye_h * 0.55, false);
+            arc(h * 0.36, h * 0.12, my);
+        }
+        // 12 困倦：闭眼线 + Zz
+        12 => {
+            closed_eye_line(-eye_dx, eye_w * 1.8, false);
+            closed_eye_line(eye_dx, eye_w * 1.8, false);
+            painter.text(
+                egui::pos2(c.x + eye_dx + eye_w * 0.6, eye_cy - h * 0.28),
+                egui::Align2::LEFT_CENTER,
+                "z",
+                egui::FontId::proportional((h * 0.20).max(7.0)),
+                col,
+            );
+            painter.text(
+                egui::pos2(c.x + eye_dx + eye_w * 1.5, eye_cy - h * 0.44),
+                egui::Align2::LEFT_CENTER,
+                "z",
+                egui::FontId::proportional((h * 0.15).max(6.0)),
+                col,
+            );
+        }
+        // 13 困惑：一大一小眼 + 问号 + 小扁嘴
+        _ => {
+            round_open(-eye_dx, eye_w * 1.2, eye_h);
+            painter.circle_filled(
+                egui::pos2(c.x + eye_dx + h * 0.03, eye_cy + h * 0.02),
+                eye_w * 0.7,
+                col,
+            );
+            painter.text(
+                egui::pos2(c.x + eye_dx + eye_w * 0.4, eye_cy - eye_h * 1.25),
+                egui::Align2::LEFT_CENTER,
+                "?",
+                egui::FontId::proportional((h * 0.24).max(7.0)),
+                col,
+            );
+            flat_mouth(h * 0.24);
+        }
+    }
 }
 
 /// 左侧菜单图标：0=音乐(音符) 1=日程(日历) 2=天气(云)——使用系统图标字体。
@@ -3742,8 +4389,8 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // 调试：MYISLE_LYRIC_TEST="歌名|歌手" 时只跑歌词抓取并打印，不启动界面
-    if let Ok(spec) = std::env::var("MYISLE_LYRIC_TEST") {
+    // 调试：WINISLE_LYRIC_TEST="歌名|歌手" 时只跑歌词抓取并打印，不启动界面
+    if let Ok(spec) = std::env::var("WINISLE_LYRIC_TEST") {
         let (t, a) = spec.split_once('|').unwrap_or((spec.as_str(), ""));
         match lyrics::fetch(t, a) {
             Some(v) => println!(
@@ -3762,7 +4409,7 @@ fn main() -> eframe::Result<()> {
 
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("MyIsle")
+            .with_title("WinIsle")
             .with_inner_size([W_EXPANDED + 2.0 * MARGIN, H_EXPANDED + 2.0 * MARGIN])
             .with_decorations(false)
             .with_transparent(true)
@@ -3773,7 +4420,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "MyIsle",
+        "WinIsle",
         opts,
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);

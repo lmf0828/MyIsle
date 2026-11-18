@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Otto 21 表情 · 选择要植入 MyIsle 的</title>
+<style>
+ :root{--bg:#0d0e12;--card:#15171e;--card2:#1a1d26;--line:#242833;--ink:#eef0f6;--muted:#98a1b1;--accent:#34d399;}
+ *{box-sizing:border-box}
+ body{margin:0;background:radial-gradient(1200px 560px at 15% -10%,#173029 0%,var(--bg) 55%) no-repeat,var(--bg);color:var(--ink);
+   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;
+   padding:44px 40px 120px}
+ .wrap{max-width:1280px;margin:0 auto}
+ h1{font-size:27px;margin:0 0 8px} h1 .dot{color:var(--accent)}
+ .sub{color:var(--muted);font-size:14.5px;line-height:1.7;max-width:900px}
+ .sub b{color:var(--ink)} .sub a{color:var(--accent);text-decoration:none}
+ .hero{margin:22px 0 8px;display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+ .hero .gifbox{background:#000;border:1px solid var(--line);border-radius:14px;padding:10px;max-width:820px}
+ .hero .gifbox img{width:100%;display:block;border-radius:8px}
+ .hero .meta{font-size:12.5px;color:var(--muted);line-height:1.7;max-width:320px}
+ .hero .meta code{color:#9fe8c8}
+ .bar{position:fixed;left:0;right:0;bottom:0;background:rgba(16,18,25,.94);backdrop-filter:blur(8px);border-top:1px solid var(--line);
+   padding:12px 24px;display:flex;align-items:center;gap:14px;z-index:50}
+ .bar .cnt{font-size:15px;font-weight:700} .bar .cnt b{color:var(--accent);font-size:18px}
+ .bar .list{color:var(--muted);font-size:12.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .bar button{font-size:13px;font-weight:600;border:1px solid #2c7a5f;background:#12251f;color:#bfefd9;padding:8px 14px;border-radius:9px;cursor:pointer}
+ .bar button:hover{background:#173a2d} .bar button.pri{background:var(--accent);color:#04150f;border-color:var(--accent)}
+ .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-top:26px}
+ @media(max-width:1120px){.grid{grid-template-columns:repeat(4,1fr)}}
+ @media(max-width:900px){.grid{grid-template-columns:repeat(3,1fr)}}
+ @media(max-width:640px){.grid{grid-template-columns:repeat(2,1fr)} body{padding:24px 16px 130px}}
+ .card{position:relative;background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:14px;
+   overflow:hidden;cursor:pointer;transition:.16s;user-select:none}
+ .card:hover{transform:translateY(-2px);border-color:#2f6e57}
+ .card.on{border-color:var(--accent);box-shadow:0 0 0 2px rgba(52,211,153,.45) inset,0 10px 26px rgba(0,0,0,.4)}
+ .thumb{background:#000;padding:10px 12px;display:flex;align-items:center;justify-content:center}
+ .thumb img{width:100%;image-rendering:pixelated;display:block}
+ .body{padding:10px 12px 12px}
+ .nm{display:flex;align-items:baseline;gap:8px} .cn{font-size:14.5px;font-weight:700} .en{font-size:11.5px;color:#7f8899}
+ .ds{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.5}
+ .chk{position:absolute;top:8px;right:8px;z-index:2}
+ .chk input{display:none}
+ .chk span{display:block;width:22px;height:22px;border-radius:7px;border:1.5px solid #3a4150;background:rgba(10,12,16,.7);transition:.15s}
+ .chk input:checked+span{background:var(--accent);border-color:var(--accent);position:relative}
+ .chk input:checked+span::after{content:"✓";position:absolute;left:0;top:-1px;width:100%;text-align:center;color:#04150f;font-weight:900;font-size:15px}
+ .note{margin-top:34px;padding:16px 20px;border:1px dashed #2c313d;border-radius:13px;color:var(--muted);font-size:12.5px;line-height:1.7;background:#101219}
+ .note b{color:var(--ink)}
+</style></head><body><div class="wrap">
+ <h1>Otto 21 表情 · 挑选要植入 MyIsle 的<span class="dot">.</span></h1>
+ <div class="sub">来源项目 <a href="https://github.com/joelbaby/esp32-oled-animated-faces" target="_blank">joelbaby/esp32-oled-animated-faces</a>（MIT，表情素材源自 <b>Otto Emoji GIF Component · txp666</b>，128×48 单色、80ms/帧）。
+ 下面按原项目顺序列出全部 21 种表情，<b>点卡片勾选</b>你希望搬进 MyIsle 待机表情的。勾完把底部清单发我即可。</div>
+
+ <div class="hero">
+   <div class="gifbox"><img src="esp32_img/joelbaby__esp32-oled-animated-faces.gif" alt="21 expressions animated"></div>
+   <div class="meta">
+     <p>↑ 原项目动画演示：眼部动作都是<b>单色像素动画</b>，靠“眨眼 / 变形 / 加符号（心、泪、怒气、Zzz、问号）”表达情绪。</p>
+     <p>每条约 40–50 帧、12.5fps 循环。搬到 MyIsle 时可用同款矢量重绘（更清晰），或直接借鉴其<b>表情形态与节奏</b>。</p>
+     <p>许可：<code>MIT</code> · 保留原作者署名。</p>
+   </div>
+ </div>
+
+ <div class="grid">
+    <div class="card" data-name="平静（neutral）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/00_neutral.png" alt="neutral"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">平静</span><span class="en">neutral</span></div>
+        <div class="ds">两个圆眼，呆萌平视</div>
+      </div>
+    </div>
+    <div class="card" data-name="开心（happy）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/01_happy.png" alt="happy"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">开心</span><span class="en">happy</span></div>
+        <div class="ds">眼睛弯成上弧 ^^</div>
+      </div>
+    </div>
+    <div class="card" data-name="大笑（laughing）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/02_laughing.png" alt="laughing"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">大笑</span><span class="en">laughing</span></div>
+        <div class="ds">笑到眯成 ><</div>
+      </div>
+    </div>
+    <div class="card" data-name="搞笑（funny）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/03_funny.png" alt="funny"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">搞笑</span><span class="en">funny</span></div>
+        <div class="ds">眉毛一挑，滑稽</div>
+      </div>
+    </div>
+    <div class="card" data-name="难过（sad）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/04_sad.png" alt="sad"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">难过</span><span class="en">sad</span></div>
+        <div class="ds">眼睛下垂成半圆</div>
+      </div>
+    </div>
+    <div class="card" data-name="生气（angry）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/05_angry.png" alt="angry"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">生气</span><span class="en">angry</span></div>
+        <div class="ds">斜眼怒视 + 怒气符号</div>
+      </div>
+    </div>
+    <div class="card" data-name="哭泣（crying）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/06_crying.png" alt="crying"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">哭泣</span><span class="en">crying</span></div>
+        <div class="ds">眼泪流下</div>
+      </div>
+    </div>
+    <div class="card" data-name="爱心眼（loving）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/07_loving.png" alt="loving"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">爱心眼</span><span class="en">loving</span></div>
+        <div class="ds">眼睛变成两颗心</div>
+      </div>
+    </div>
+    <div class="card" data-name="害羞（embarrassed）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/08_embarrassed.png" alt="embarrassed"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">害羞</span><span class="en">embarrassed</span></div>
+        <div class="ds">脸红 + 汗滴</div>
+      </div>
+    </div>
+    <div class="card" data-name="惊讶（surprised）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/09_surprised.png" alt="surprised"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">惊讶</span><span class="en">surprised</span></div>
+        <div class="ds">瞪大椭圆眼 + 惊叹线</div>
+      </div>
+    </div>
+    <div class="card" data-name="震惊（shocked）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/10_shocked.png" alt="shocked"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">震惊</span><span class="en">shocked</span></div>
+        <div class="ds">大圆眼 + 高光</div>
+      </div>
+    </div>
+    <div class="card" data-name="思考（thinking）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/11_thinking.png" alt="thinking"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">思考</span><span class="en">thinking</span></div>
+        <div class="ds">一眼大一眼小，若有所思</div>
+      </div>
+    </div>
+    <div class="card" data-name="眨眼（winking）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/12_winking.png" alt="winking"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">眨眼</span><span class="en">winking</span></div>
+        <div class="ds">单眼闭上眨一下</div>
+      </div>
+    </div>
+    <div class="card" data-name="酷（cool）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/13_cool.png" alt="cool"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">酷</span><span class="en">cool</span></div>
+        <div class="ds">戴上墨镜</div>
+      </div>
+    </div>
+    <div class="card" data-name="放松（relaxed）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/14_relaxed.png" alt="relaxed"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">放松</span><span class="en">relaxed</span></div>
+        <div class="ds">弯弯的眯眯眼</div>
+      </div>
+    </div>
+    <div class="card" data-name="馋/好吃（delicious）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/15_delicious.png" alt="delicious"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">馋/好吃</span><span class="en">delicious</span></div>
+        <div class="ds">笑眼 + 舔嘴角</div>
+      </div>
+    </div>
+    <div class="card" data-name="亲亲（kissy）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/16_kissy.png" alt="kissy"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">亲亲</span><span class="en">kissy</span></div>
+        <div class="ds">星星眼 / 飞吻</div>
+      </div>
+    </div>
+    <div class="card" data-name="自信（confident）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/17_confident.png" alt="confident"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">自信</span><span class="en">confident</span></div>
+        <div class="ds">半眯自信眼</div>
+      </div>
+    </div>
+    <div class="card" data-name="困倦（sleepy）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/18_sleepy.png" alt="sleepy"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">困倦</span><span class="en">sleepy</span></div>
+        <div class="ds">闭眼 + Zzz</div>
+      </div>
+    </div>
+    <div class="card" data-name="搞怪（silly）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/19_silly.png" alt="silly"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">搞怪</span><span class="en">silly</span></div>
+        <div class="ds">大小眼 + 吐舌</div>
+      </div>
+    </div>
+    <div class="card" data-name="困惑（confused）" onclick="toggle(this)">
+      <label class="chk"><input type="checkbox" onclick="event.stopPropagation();toggle(this.closest('.card'))"><span></span></label>
+      <div class="thumb"><img src="otto_faces/20_confused.png" alt="confused"></div>
+      <div class="body">
+        <div class="nm"><span class="cn">困惑</span><span class="en">confused</span></div>
+        <div class="ds">大小眼 + 问号</div>
+      </div>
+    </div>
+ </div>
+
+ <div class="note"><b>建议：</b>MyIsle 收起态很小（≈92×30），表情宜“少而准”。我推荐优先：<b>平静、开心、眨眼、困倦、惊讶、搞怪、亲亲 / 爱心</b> 这类轮廓简单、迷你尺寸也认得出的；<b>哭泣 / 害羞 / 好吃 / 思考</b> 这类靠符号（泪 / 汗 / 舌）表达的适合放进展开态或更大的圆盘里。你勾完想要的，我再按同样的画法（圆角矩形眼 + 弧线嘴）做成可选表情集。</div>
+ <div style="margin-top:14px;color:#5e6675;font-size:12px">Otto 表情 © txp666（Otto Emoji GIF Component）· 移植 © joelbaby · MIT License</div>
+</div>
+
+<div class="bar">
+  <div class="cnt">已选 <b id="n">0</b> / 21</div>
+  <div class="list" id="list">（点上面的卡片勾选）</div>
+  <button onclick="selAll()">全选</button>
+  <button onclick="clearAll()">清空</button>
+  <button class="pri" onclick="copySel()">复制清单</button>
+</div>
+<script>
+function toggle(card){
+  var cb=card.querySelector('input');
+  cb.checked=!cb.checked;
+  card.classList.toggle('on',cb.checked);
+  refresh();
+}
+function refresh(){
+  var on=[].slice.call(document.querySelectorAll('.card.on'));
+  document.getElementById('n').textContent=on.length;
+  var names=on.map(function(c){return c.getAttribute('data-name')});
+  document.getElementById('list').textContent=names.length?names.join('、'):'（点上面的卡片勾选）';
+}
+function selAll(){document.querySelectorAll('.card').forEach(function(c){c.classList.add('on');c.querySelector('input').checked=true;});refresh();}
+function clearAll(){document.querySelectorAll('.card').forEach(function(c){c.classList.remove('on');c.querySelector('input').checked=false;});refresh();}
+function copySel(){
+  var names=[].slice.call(document.querySelectorAll('.card.on')).map(function(c){return c.getAttribute('data-name')});
+  if(!names.length){alert('还没选哦');return;}
+  var t=names.join('、');
+  navigator.clipboard&&navigator.clipboard.writeText(t);
+  alert('已复制：\n'+t);
+}
+</script>
+</body></html>

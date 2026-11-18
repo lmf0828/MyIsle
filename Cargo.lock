@@ -1542,19 +1542,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "myisle"
-version = "0.2.1"
-dependencies = [
- "eframe",
- "image",
- "raw-window-handle",
- "serde_json",
- "tray-icon",
- "ureq",
- "windows",
-]
-
-[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3329,6 +3316,19 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winisle"
+version = "0.2.1"
+dependencies = [
+ "eframe",
+ "image",
+ "raw-window-handle",
+ "serde_json",
+ "tray-icon",
+ "ureq",
+ "windows",
+]
 
 [[package]]
 name = "winit"

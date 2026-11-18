@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>开源 ESP32 表情 / 机器人脸方案精选</title>
+<style>
+  :root{
+    --bg:#0d0e12; --card:#15171e; --card2:#1a1d26; --line:#242833;
+    --ink:#eef0f6; --muted:#9aa3b2; --accent:#34d399; --accent2:#0ea5e9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 20% -10%, #182a2a 0%, var(--bg) 55%) no-repeat, var(--bg);
+       color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+       -webkit-font-smoothing:antialiased;padding:48px 40px 72px}
+  .wrap{max-width:1240px;margin:0 auto}
+  header h1{font-size:30px;margin:0 0 10px;letter-spacing:.5px}
+  header h1 .dot{color:var(--accent)}
+  .sub{color:var(--muted);font-size:15px;line-height:1.7;max-width:860px}
+  .sub b{color:var(--ink)}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 6px}
+  .chip{font-size:12px;color:#cfe9dd;background:#12251f;border:1px solid #1f4536;padding:5px 11px;border-radius:999px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:28px}
+  @media(max-width:1080px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:680px){.grid{grid-template-columns:1fr}body{padding:28px 18px 48px}}
+  .card{background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:16px;
+        overflow:hidden;display:flex;flex-direction:column;transition:.18s ease;position:relative}
+  .card:hover{transform:translateY(-3px);border-color:#2f6e57;box-shadow:0 14px 34px rgba(0,0,0,.45)}
+  .thumb{height:188px;background:#0b0c11;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb .ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:52px;
+             background:linear-gradient(135deg,#12352b,#0e2233)}
+  .rank{position:absolute;top:10px;left:10px;font-size:11px;font-weight:700;color:#04150f;background:var(--accent);
+        padding:3px 9px;border-radius:999px;letter-spacing:.4px}
+  .body{padding:15px 16px 16px;display:flex;flex-direction:column;gap:9px;flex:1}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .name{font-size:15.5px;font-weight:700;letter-spacing:.2px;word-break:break-all}
+  .stars{font-size:12.5px;color:#f5c451;white-space:nowrap}
+  .desc{font-size:13px;line-height:1.62;color:var(--muted);flex:1}
+  .tags{display:flex;gap:6px;flex-wrap:wrap}
+  .tag{font-size:11px;color:#aeb6c6;background:#20242f;border:1px solid #2a2f3c;padding:3px 8px;border-radius:7px}
+  .tag.lic{color:#9fe8c8;background:#12251f;border-color:#1f4536}
+  .foot{display:flex;align-items:center;justify-content:space-between;margin-top:2px}
+  .lang{font-size:11.5px;color:#7f8899}
+  a.go{font-size:12.5px;font-weight:600;color:#04150f;background:var(--accent);border-radius:8px;
+       padding:7px 12px;text-decoration:none;transition:.15s}
+  a.go:hover{background:#5ee7b0}
+  .note{margin-top:40px;padding:18px 20px;border:1px dashed #2c313d;border-radius:14px;color:var(--muted);
+        font-size:13px;line-height:1.7;background:#101219}
+  .note b{color:var(--ink)}
+  footer{margin-top:26px;color:#5e6675;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>开源 ESP32 表情 / 机器人脸方案<span class="dot">.</span> 精选</h1>
+    <div class="sub">
+      在 GitHub 上按 <b>“esp32 / 机器人脸 / 动画眼睛 / 表情”</b> 整理的一批可运行、可读源码的开源项目，
+      多数是 <b>OLED(SSD1306/SH1106)</b> 或 <b>圆形 LCD(GC9A01 240×240)</b> 上绘制的“会眨眼、会看、有情绪”的机器人脸。
+      正好可以参考它们的<b>表情设计与动画手法</b>，搬到 MyIsle 的收起态待机表情上。
+    </div>
+    <div class="chips">
+      <span class="chip">OSHW 开源固件</span>
+      <span class="chip">OLED / 圆屏 LCD</span>
+      <span class="chip">眨眼 · 视线 · 情绪</span>
+      <span class="chip">Arduino / ESP-IDF</span>
+      <span class="chip">按 Star 排序</span>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <!-- 1 -->
+    <div class="card">
+      <div class="thumb"><span class="rank">TOP 1</span><img src="esp32_img/FluxGarage__RoboEyes.jpg" alt="RoboEyes"></div>
+      <div class="body">
+        <div class="row"><div class="name">FluxGarage / RoboEyes</div><div class="stars">★ 972</div></div>
+        <div class="desc">最经典的“机器人眼睛”库：在 OLED 上平滑绘制眨眼、视线游走、开心/生气/惊讶等情绪，基于 Adafruit GFX，Arduino 与 ESP32 通用，几行代码就能跑。</div>
+        <div class="tags"><span class="tag lic">GPL-3.0</span><span class="tag">OLED SSD1306</span><span class="tag">表情库</span><span class="tag">C++</span></div>
+        <div class="foot"><span class="lang">C++ · Arduino</span><a class="go" href="https://github.com/FluxGarage/RoboEyes" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="card">
+      <div class="thumb"><span class="rank">TOP 2</span><img src="esp32_img/playfultechnology__esp32-eyes.jpg" alt="esp32-eyes"></div>
+      <div class="body">
+        <div class="row"><div class="name">playfultechnology / esp32-eyes</div><div class="stars">★ 398</div></div>
+        <div class="desc">致敬 Anki Cozmo 的“情感眼”，0.96" SSD1306 OLED 上做表情动画；README 附完整接线图与讲解，很适合入门照着复刻。</div>
+        <div class="tags"><span class="tag lic">GPL-3.0</span><span class="tag">OLED SSD1306</span><span class="tag">Cozmo 风格</span><span class="tag">附接线图</span></div>
+        <div class="foot"><span class="lang">C++ · Arduino</span><a class="go" href="https://github.com/playfultechnology/esp32-eyes" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="card">
+      <div class="thumb"><span class="rank">TOP 3</span><img src="esp32_img/thelastoutpostworkshop__ESP32LCDRound240x240Eyes.jpg" alt="Round Eyes"></div>
+      <div class="body">
+        <div class="row"><div class="name">ESP32LCDRound240x240Eyes</div><div class="stars">★ 125</div></div>
+        <div class="desc">用 ESP32 + GC9A01 圆形屏（240×240）+ TFT_eSPI 做“大眼”动画的完整教程，含绘制函数拆解，是圆屏眼睛的标杆范例。</div>
+        <div class="tags"><span class="tag lic">MIT</span><span class="tag">GC9A01 圆屏</span><span class="tag">TFT_eSPI</span><span class="tag">教程</span></div>
+        <div class="foot"><span class="lang">C++ · Arduino</span><a class="go" href="https://github.com/thelastoutpostworkshop/ESP32LCDRound240x240Eyes" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 4 -->
+    <div class="card">
+      <div class="thumb"><img src="esp32_img/upiir__dual_lcd_robot_eyes.png" alt="dual lcd eyes"></div>
+      <div class="body">
+        <div class="row"><div class="name">upiir / dual_lcd_robot_eyes</div><div class="stars">★ 63</div></div>
+        <div class="desc">Waveshare 0.71" DualEye 双圆屏 + ESP32-C3-Zero 的“立体双眼”，两颗独立圆屏做出真正的深度与立体感。</div>
+        <div class="tags"><span class="tag lic">MIT</span><span class="tag">双圆屏 DualEye</span><span class="tag">ESP32-C3</span></div>
+        <div class="foot"><span class="lang">C++</span><a class="go" href="https://github.com/upiir/dual_lcd_robot_eyes" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 5 -->
+    <div class="card">
+      <div class="thumb"><img src="esp32_img/joelbaby__esp32-oled-animated-faces.gif" alt="animated faces"></div>
+      <div class="body">
+        <div class="row"><div class="name">joelbaby / esp32-oled-animated-faces</div><div class="stars">★ 1</div></div>
+        <div class="desc">把 Otto 机器人的 21 个表情动画搬到 128×64 OLED，附一键生成表情图的轻量播放器（ESP32-C3），表情素材非常全。</div>
+        <div class="tags"><span class="tag lic">MIT</span><span class="tag">OLED 128×64</span><span class="tag">21 表情</span><span class="tag">ESP-IDF</span></div>
+        <div class="foot"><span class="lang">C++ · ESP-IDF</span><a class="go" href="https://github.com/joelbaby/esp32-oled-animated-faces" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 6 -->
+    <div class="card">
+      <div class="thumb"><img src="esp32_img/olli-ai__buddyos-stem-display-firmware.gif" alt="buddyos"></div>
+      <div class="body">
+        <div class="row"><div class="name">olli-ai / buddyos-stem-display</div><div class="stars">★ 8</div></div>
+        <div class="desc">面向语音助手的可定制动画脸固件（ESP32-S3 / ESP32-P4），GC9A01 圆屏 + 麦克风 + 功放，整套硬件方案都开源。</div>
+        <div class="tags"><span class="tag lic">Apache-2.0</span><span class="tag">GC9A01 圆屏</span><span class="tag">语音助手</span><span class="tag">ESP-IDF</span></div>
+        <div class="foot"><span class="lang">C++ · ESP-IDF</span><a class="go" href="https://github.com/olli-ai/buddyos-stem-display-firmware" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 7 -->
+    <div class="card">
+      <div class="thumb"><img src="esp32_img/intellar__Dual_Display_ESP32.png" alt="intellar"></div>
+      <div class="body">
+        <div class="row"><div class="name">intellar / Dual_Display_ESP32</div><div class="stars">★ 9</div></div>
+        <div class="desc">双 LCD 实现逼真、会动的双眼，做成一颗圆头机器人，眼部高光与移动很自然。</div>
+        <div class="tags"><span class="tag lic">MIT</span><span class="tag">双 LCD</span><span class="tag">逼真眼球</span></div>
+        <div class="foot"><span class="lang">C++</span><a class="go" href="https://github.com/intellar/Dual_Display_ESP32" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 8 -->
+    <div class="card">
+      <div class="thumb"><img src="esp32_img/VIDAKHOSHPEY22__Dumirror_Robo.gif" alt="Dumirror"></div>
+      <div class="body">
+        <div class="row"><div class="name">VIDAKHOSHPEY22 / Dumirror_Robo</div><div class="stars">★ 3</div></div>
+        <div class="desc">面向 SSD1306 128×64 的表现力机器人脸 Arduino 库，跨平台（AVR/ESP32/ESP8266/RP2040），接口简洁、易嵌入。</div>
+        <div class="tags"><span class="tag lic">MIT</span><span class="tag">OLED SSD1306</span><span class="tag">Arduino 库</span><span class="tag">跨平台</span></div>
+        <div class="foot"><span class="lang">C++ · Arduino</span><a class="go" href="https://github.com/VIDAKHOSHPEY22/Dumirror_Robo" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 9 (no img) -->
+    <div class="card">
+      <div class="thumb"><div class="ph">🫧</div></div>
+      <div class="body">
+        <div class="row"><div class="name">atq-ren / esp32-robot-face</div><div class="stars">★ 14</div></div>
+        <div class="desc">“Bloub”——14 种表情的动画团子脸，专门为 Waveshare ESP32-S3-Touch-AMOLED-1.75 圆屏定制，表情切换很丰富。</div>
+        <div class="tags"><span class="tag">AMOLED 1.75"</span><span class="tag">14 表情</span><span class="tag">ESP32-S3</span></div>
+        <div class="foot"><span class="lang">C++</span><a class="go" href="https://github.com/atq-ren/esp32-robot-face" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 10 (no img) -->
+    <div class="card">
+      <div class="thumb"><div class="ph">😀</div></div>
+      <div class="body">
+        <div class="row"><div class="name">esp32-sh1106-oled-emojis-web</div><div class="stars">★ 21</div></div>
+        <div class="desc">ESP32 + SH1106 128×64 OLED 的 18 种“表情包”，自带网页切换 UI，可以直接在浏览器里点选表情。</div>
+        <div class="tags"><span class="tag lic">MIT</span><span class="tag">OLED SH1106</span><span class="tag">18 表情</span><span class="tag">网页控制</span></div>
+        <div class="foot"><span class="lang">C++</span><a class="go" href="https://github.com/lsa709680-source/esp32-sh1106-oled-emojis-web" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 11 (no img) -->
+    <div class="card">
+      <div class="thumb"><div class="ph">🤖</div></div>
+      <div class="body">
+        <div class="row"><div class="name">denuwanbogoda33 / ESP-EMO</div><div class="stars">★ 11</div></div>
+        <div class="desc">OLED 眼睛 + 情绪状态，还集成 Spotify、F1 实时数据、天气与 WebSocket 仪表盘，做成完整的桌面小机器人。</div>
+        <div class="tags"><span class="tag lic">MIT</span><span class="tag">OLED 眼睛</span><span class="tag">情绪</span><span class="tag">WebSocket</span></div>
+        <div class="foot"><span class="lang">C++ · Arduino</span><a class="go" href="https://github.com/denuwanbogoda33/ESP-EMO" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+    <!-- 12 (no img) -->
+    <div class="card">
+      <div class="thumb"><div class="ph">👀</div></div>
+      <div class="body">
+        <div class="row"><div class="name">impressto / esp_lcd_eyes</div><div class="stars">★ 5</div></div>
+        <div class="desc">用 TFT 屏 + 精灵图（sprite）在 ESP32 上显示动画眼睛的最小示例，代码短、结构清晰，适合当模板改。</div>
+        <div class="tags"><span class="tag">TFT 屏</span><span class="tag">精灵图动画</span><span class="tag">示例代码</span></div>
+        <div class="foot"><span class="lang">C++</span><a class="go" href="https://github.com/impressto/esp_lcd_eyes" target="_blank">GitHub ↗</a></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="note">
+    <b>怎么选 / 怎么用：</b>如果想要“现成能跑、资料最多”，从 <b>RoboEyes</b> 和 <b>playfultechnology/esp32-eyes</b> 入手；
+    如果上圆形屏（GC9A01 240×240，很接近 MyIsle 的圆盘观感），看 <b>ESP32LCDRound240x240Eyes</b> 和 <b>Bloub</b>；
+    要“表情数量多、有网页切换”，看 <b>esp32-sh1106-oled-emojis-web</b> 与 <b>joelbaby</b> 的 21 表情素材。
+    它们的共同套路都是：<b>两块圆角矩形当眼睛 + 一段抛物线/圆弧当嘴 + 用周期函数做眨眼/浮动</b>——和我们 MyIsle 待机表情是同一套思路，可以直接借鉴表情参数。
+    <br><br>
+    说明：Star 数为抓取当时（2026-11）的近似值；GIF 为项目 README 的演示动画。所有项目版权/许可归原作者，使用请遵循其 LICENSE。
+  </div>
+
+  <footer>整理自 GitHub 公开仓库 · 供 MyIsle 待机表情设计参考</footer>
+</div>
+</body>
+</html>

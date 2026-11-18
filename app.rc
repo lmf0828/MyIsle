@@ -1,6 +1,6 @@
 #pragma code_page(65001)
 
-1 ICON "assets/myisle.ico"
+1 ICON "assets/winisle.ico"
 
 1 VERSIONINFO
  FILEVERSION 0,2,1,0
@@ -15,10 +15,10 @@ BEGIN
     BEGIN
         BLOCK "080404b0"
         BEGIN
-            VALUE "FileDescription", "MyIsle — Windows 灵动岛"
-            VALUE "InternalName", "MyIsle"
-            VALUE "OriginalFilename", "MyIsle.exe"
-            VALUE "ProductName", "MyIsle"
+            VALUE "FileDescription", "WinIsle — Windows 灵动岛"
+            VALUE "InternalName", "WinIsle"
+            VALUE "OriginalFilename", "WinIsle.exe"
+            VALUE "ProductName", "WinIsle"
             VALUE "ProductVersion", "0.2.1"
             VALUE "FileVersion", "0.2.1"
         END

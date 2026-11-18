@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WinIsle · 黑岛放到绿岛位置/角度</title>
+<style>
+  :root{ --bg:#0d0e12; --card:#14161c; --line:#242a33; --ink:#e8ebf2; --mut:#8b93a3; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:720px;margin:0 auto;padding:44px 28px 60px;}
+  header{text-align:center;margin-bottom:24px}
+  header h1{font-size:22px;margin:0 0 10px}
+  header p{margin:0;color:var(--mut);font-size:13px;line-height:1.65}
+  .hero{display:flex;justify-content:center;margin-bottom:16px}
+  .hero .big{width:250px;height:250px;filter:drop-shadow(0 16px 34px rgba(0,0,0,.5))}
+  .hero .big svg{width:100%;height:100%}
+  .cap{text-align:center;color:var(--mut);font-size:12.5px;margin-bottom:28px}
+  .previews{display:flex;justify-content:center;gap:20px;flex-wrap:wrap}
+  .pcard{border-radius:16px;padding:16px 20px;display:flex;align-items:center;gap:16px}
+  .pcard.dark{background:#15171d;border:1px solid var(--line)}
+  .pcard.light{background:#eef1f4;border:1px solid #d7dbe2}
+  .pcard .t{font-size:11px;color:var(--mut)} .pcard.light .t{color:#6b7280}
+  .pcard svg{display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>WinIsle 图标 · 黑岛移到绿岛的位置与角度</h1>
+    <p>去掉绿岛；把黑色岛放到原来绿岛的位置、同样的 -8° 倾斜，右下角保留绿点。</p>
+  </header>
+
+  <div class="hero">
+    <div class="big"><svg viewBox="0 0 128 128">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs>
+      <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#g)"/>
+      <g transform="rotate(-8 64 53)">
+        <rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14"/>
+        <circle cx="86" cy="53" r="5.5" fill="#34d399"/>
+      </g>
+    </svg></div>
+  </div>
+  <div class="cap">主图标（250px）</div>
+
+  <div class="previews">
+    <div class="pcard dark">
+      <span class="t">深色桌面</span>
+      <svg width="48" height="48" viewBox="0 0 128 128"><defs><linearGradient id="d1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#d1)"/><g transform="rotate(-8 64 53)"><rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="53" r="5.5" fill="#34d399"/></g></svg>
+      <svg width="32" height="32" viewBox="0 0 128 128"><defs><linearGradient id="d2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#d2)"/><g transform="rotate(-8 64 53)"><rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="53" r="5.5" fill="#34d399"/></g></svg>
+      <svg width="22" height="22" viewBox="0 0 128 128"><defs><linearGradient id="d3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#d3)"/><g transform="rotate(-8 64 53)"><rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="53" r="5.5" fill="#34d399"/></g></svg>
+    </div>
+    <div class="pcard light">
+      <span class="t">浅色桌面</span>
+      <svg width="48" height="48" viewBox="0 0 128 128"><defs><linearGradient id="l1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#l1)"/><g transform="rotate(-8 64 53)"><rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="53" r="5.5" fill="#34d399"/></g></svg>
+      <svg width="32" height="32" viewBox="0 0 128 128"><defs><linearGradient id="l2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#l2)"/><g transform="rotate(-8 64 53)"><rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="53" r="5.5" fill="#34d399"/></g></svg>
+    </div>
+  </div>
+</div>
+</body>
+</html>

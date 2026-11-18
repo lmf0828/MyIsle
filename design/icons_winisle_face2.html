@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WinIsle · 开心表情（1:1·平滑）</title>
+<style>
+  :root{ --bg:#0d0e12; --card:#14161c; --line:#242a33; --ink:#e8ebf2; --mut:#8b93a3; --acc:#34d399; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:760px;margin:0 auto;padding:40px 26px 54px;}
+  header{text-align:center;margin-bottom:22px}
+  header h1{font-size:22px;margin:0 0 10px}
+  header p{margin:0;color:var(--mut);font-size:12.5px;line-height:1.65}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 12px 14px;display:flex;flex-direction:column;align-items:center;text-align:center}
+  .big{width:170px;height:170px;margin-bottom:6px}
+  .big svg{width:100%;height:100%;display:block;filter:drop-shadow(0 10px 22px rgba(0,0,0,.45))}
+  .name{font-size:12.5px;font-weight:700;margin:6px 0 3px}
+  .desc{font-size:11px;color:var(--mut);line-height:1.5}
+  .rec{position:relative}
+  .rec:before{content:"推荐";position:absolute;top:-9px;left:50%;transform:translateX(-50%);background:var(--acc);color:#08110d;font-size:10px;font-weight:800;border-radius:999px;padding:2px 9px;letter-spacing:1px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>WinIsle 图标 · 开心表情（一比一 · 平滑）</h1>
+    <p>换成「开心」表情，用高分辨率原图重贴，边缘平滑不再有锯齿；绿点去掉。</p>
+  </header>
+  <div class="grid">
+
+    <!-- A -->
+    <div class="card">
+      <div class="big"><svg viewBox="0 0 128 128">
+        <defs><linearGradient id="ga" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs>
+        <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#ga)"/>
+        <g transform="rotate(-8 64 53)">
+          <rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14"/>
+          <image href="happy_mint.png" x="35" y="40.85" width="58" height="24.3"/>
+        </g>
+      </svg></div>
+      <div class="name">A · 原黑岛 + 眼睛</div>
+      <div class="desc">黑岛大小/角度不变，眼睛缩在岛内。</div>
+    </div>
+
+    <!-- B -->
+    <div class="card rec">
+      <div class="big"><svg viewBox="0 0 128 128">
+        <defs><linearGradient id="gb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs>
+        <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#gb)"/>
+        <g transform="rotate(-8 64 53)">
+          <rect x="24" y="32" width="80" height="42" rx="21" fill="#0b0f14"/>
+          <image href="happy_mint.png" x="29" y="38.34" width="70" height="29.3"/>
+        </g>
+      </svg></div>
+      <div class="name">B · 黑岛加高一点</div>
+      <div class="desc">黑岛稍微加大，眼睛更舒展，像一张笑脸。</div>
+    </div>
+
+    <!-- C -->
+    <div class="card">
+      <div class="big"><svg viewBox="0 0 128 128">
+        <defs><linearGradient id="gc" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs>
+        <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#gc)"/>
+        <image href="happy_mint.png" x="21" y="46" width="86" height="36" transform="rotate(-8 64 64)"/>
+      </svg></div>
+      <div class="name">C · 去掉黑岛，只留眼睛</div>
+      <div class="desc">渐变底 + 开心眼睛，最简洁。</div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

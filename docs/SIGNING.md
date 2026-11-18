@@ -20,8 +20,8 @@
 ```
 
 配置后，`.github/workflows/release.yml` 里的两个「Code sign (optional)」步骤会自动：
-1. 用 `signtool` 对 `target\release\myisle.exe` 签名（时间戳 `timestamp.digicert.com`）；
-2. 对 `dist\MyIsle-Setup-<ver>.exe` 再签一次。
+1. 用 `signtool` 对 `target\release\winisle.exe` 签名（时间戳 `timestamp.digicert.com`）；
+2. 对 `dist\WinIsle-Setup-<ver>.exe` 再签一次。
 
 没有配置这两个 Secret 时，步骤自动跳过，其余发布流程不受影响。
 
@@ -29,7 +29,7 @@
 ```powershell
 $signtool = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
   Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
-& $signtool sign /f cert.pfx /p <密码> /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 .\MyIsle.exe
+& $signtool sign /f cert.pfx /p <密码> /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 .\WinIsle.exe
 ```
 
 ## 四、注意

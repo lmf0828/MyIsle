@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WinIsle · 去绿岛（黑岛方案）</title>
+<style>
+  :root{ --bg:#0d0e12; --card:#14161c; --line:#242a33; --ink:#e8ebf2; --mut:#8b93a3; --acc:#34d399; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:760px;margin:0 auto;padding:40px 28px 56px;}
+  header{text-align:center;margin-bottom:24px}
+  header h1{font-size:22px;margin:0 0 10px}
+  header p{margin:0;color:var(--mut);font-size:13px;line-height:1.65}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px 16px 16px;display:flex;flex-direction:column;align-items:center;text-align:center}
+  .big{width:200px;height:200px;margin-bottom:6px}
+  .big svg{width:100%;height:100%;display:block;filter:drop-shadow(0 12px 26px rgba(0,0,0,.45))}
+  .name{font-size:13.5px;font-weight:700;margin:6px 0 3px}
+  .desc{font-size:12px;color:var(--mut);line-height:1.55;max-width:230px}
+  .row{display:flex;align-items:center;gap:12px;margin-top:10px}
+  .row .lbl{font-size:10.5px;color:var(--mut)}
+  .rec{position:relative}
+  .rec:before{content:"推荐";position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--acc);color:#08110d;font-size:11px;font-weight:800;border-radius:999px;padding:3px 10px;letter-spacing:1px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>去掉绿岛，只留黑色岛</h1>
+    <p>左：只保留一个黑岛（居中）。右：两个岛都改成黑色（绿岛也不要了）。<br>绿点保留。</p>
+  </header>
+  <div class="grid">
+
+    <!-- A 单个黑岛居中 -->
+    <div class="card rec">
+      <div class="big"><svg viewBox="0 0 128 128">
+        <defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs>
+        <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#a)"/>
+        <rect x="28" y="49" width="72" height="30" rx="15" fill="#0b0f14"/>
+        <circle cx="86" cy="64" r="5.5" fill="#34d399"/>
+      </svg></div>
+      <div class="name">A · 单个黑岛（居中）</div>
+      <div class="desc">去掉绿岛，只留一个黑岛并放正中间，右下绿点。最干净。</div>
+      <div class="row">
+        <span class="lbl">小尺寸</span>
+        <svg width="48" height="48" viewBox="0 0 128 128"><defs><linearGradient id="a1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#a1)"/><rect x="28" y="49" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="64" r="5.5" fill="#34d399"/></svg>
+        <svg width="32" height="32" viewBox="0 0 128 128"><defs><linearGradient id="a2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#a2)"/><rect x="28" y="49" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="64" r="5.5" fill="#34d399"/></svg>
+      </div>
+    </div>
+
+    <!-- B 两个都黑 -->
+    <div class="card">
+      <div class="big"><svg viewBox="0 0 128 128">
+        <defs><linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs>
+        <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#b)"/>
+        <rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14" transform="rotate(-8 64 53)"/>
+        <rect x="28" y="60" width="72" height="30" rx="15" fill="#0b0f14"/>
+        <circle cx="86" cy="75" r="5.5" fill="#34d399"/>
+      </svg></div>
+      <div class="name">B · 两岛都变黑（叠一起）</div>
+      <div class="desc">把上面那块绿岛也换成黑，两岛叠成一体，右下绿点。保留“层叠”轮廓。</div>
+      <div class="row">
+        <span class="lbl">小尺寸</span>
+        <svg width="48" height="48" viewBox="0 0 128 128"><defs><linearGradient id="b1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#b1)"/><rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14" transform="rotate(-8 64 53)"/><rect x="28" y="60" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="75" r="5.5" fill="#34d399"/></svg>
+        <svg width="32" height="32" viewBox="0 0 128 128"><defs><linearGradient id="b2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#0ea5e9"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#b2)"/><rect x="28" y="38" width="72" height="30" rx="15" fill="#0b0f14" transform="rotate(-8 64 53)"/><rect x="28" y="60" width="72" height="30" rx="15" fill="#0b0f14"/><circle cx="86" cy="75" r="5.5" fill="#34d399"/></svg>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
