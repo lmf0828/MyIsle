@@ -924,6 +924,7 @@ struct IslandApp {
     spec_play_w: f32,
     spec_fast: f32,
     spec_slow: f32,
+    spec_prev_lvl: f32,
     /// 最近一次显示过的歌词行号（滞回，避免边界处来回跳）
     lyr_idx_last: i32,
     /// 收起态歌词“上滚”动画：换行瞬间的时刻，以及上一句（滚出）的索引
@@ -1176,6 +1177,7 @@ impl IslandApp {
             spec_play_w: 0.0,
             spec_fast: 0.0,
             spec_slow: 0.0,
+            spec_prev_lvl: 0.0,
             lyr_idx_last: -1,
             lyr_anim_at: None,
             lyr_anim_from: None,
@@ -2981,7 +2983,7 @@ impl IslandApp {
         let x0 = fill_rect.left() + pad_x;
         let x1 = fill_rect.right() - pad_x;
         // 地平线略下移（0.55→0.60），给上方灯柱更多生长空间；倒影仍在下方。
-        let horizon = rect.top() + rect.height() * 0.94;
+        let horizon = rect.top() + rect.height() * 0.68;
         let max_h = ((horizon - (rect.top() - over) - 2.0) * 0.95).max(2.0);
         let refl_depth = (rect.bottom() - horizon - 1.0).max(2.0);
         let n = (((x1 - x0) / 7.0).floor() as usize).clamp(20, 72);
@@ -3017,12 +3019,25 @@ impl IslandApp {
         let ks = 1.0 - (-dt / 0.80).exp();
         self.spec_slow += (lvl - self.spec_slow) * ks;
         let pulse = (((self.spec_fast - self.spec_slow) / self.spec_slow.max(0.04)) * 6.0).clamp(0.0, 1.6);
+        // 起音检测：电平骤升（鼓点/重拍）时给出更强的瞬时脉冲。
+        let dlev = ((lvl - self.spec_prev_lvl) / dt.max(0.001)).clamp(0.0, 30.0);
+        self.spec_prev_lvl = lvl;
+        let onset = (dlev * 0.9).clamp(0.0, 1.4);
+        let beat = pulse.max(onset).clamp(0.0, 1.6);
         let lvl_norm = (self.spec_fast / 0.30).clamp(0.0, 1.0);
-        let drive_play = (0.40 + 0.60 * lvl_norm + 0.50 * pulse).clamp(0.28, 1.22);
+        let drive_play = (0.40 + 0.60 * lvl_norm + 0.55 * beat).clamp(0.28, 1.25);
         let drive_pause = 0.60 + 0.18 * idle_breath;
         let drive = drive_pause + (drive_play - drive_pause) * pw;
 
         let tt = t as f32;
+        let hash01 = |mut x: u32| -> f32 {
+            x ^= x >> 16;
+            x = x.wrapping_mul(0x7feb_352d);
+            x ^= x >> 15;
+            x = x.wrapping_mul(0x846c_a68b);
+            x ^= x >> 16;
+            (x & 0xffff) as f32 / 65535.0
+        };
         for i in 0..n {
             let f = i as f32 / (n as f32 - 1.0).max(1.0);
             let d = ((f - 0.5).abs() * 2.0).clamp(0.0, 1.0);
@@ -3034,12 +3049,20 @@ impl IslandApp {
             };
             let env_pause = 0.55 + 0.45 * env_bowl;
             let env = env_pause + (1.0 - env_pause) * pw;
-            // 两根平滑空间正弦叠成有序行波（随 f 连续、无逐柱随机 → 高度高低有序）
-            let wave = (f * 6.2 - tt * 1.6).sin() * 0.60
-                + (f * 2.8 - tt * 0.90 + 1.1).sin() * 0.40;
-            let amp = (0.12 + 0.88 * (wave * 0.5 + 0.5)) * env;
-            // 软饱和（指数）到顶：响/拍点越高越接近上限，但不出现一刀切的平顶。
-            let target_h = (max_h * (amp * drive).clamp(0.0, 0.97)).max(1.5);
+            // 多重平滑空间正弦：正反方向行波叠加 + 少量固定个体相位 → 不是单向滑过，而是各自起伏的波面。
+            let ph = hash01((i as u32).wrapping_mul(2_654_435_761)) * 0.9;
+            let tf = tt * (0.55 + 1.45 * pw);
+            let wave = (f * 4.6 - tf * 1.5 + ph * 0.4).sin() * 0.45
+                + (f * 7.4 + tf * 1.05 + ph * 0.7).sin() * 0.30
+                + (f * 2.2 - tf * 0.55).sin() * 0.25;
+            // 每根柱子再叠一层较快的个体起伏（播放时更明显）→ 各柱各自弹跳，而非整片同起同落。
+            let bob = ((tt * 3.1 + ph * 3.0).sin() * 0.5 + 0.5) - 0.5;
+            let wave = wave + bob * 0.35 * pw;
+            let amp = (0.06 + 0.94 * (wave * 0.5 + 0.5)).clamp(0.03, 1.0) * env;
+            // 基础波高 + 拍点抬升：鼓点时整排明显窜一下。
+            let base = (amp * drive).clamp(0.0, 0.90);
+            let lift = 0.45 * beat * (0.45 + 0.55 * env);
+            let target_h = (max_h * (base + lift).clamp(0.0, 1.0)).max(1.5);
             // 上涨快、回落慢 → 涌起后缓缓退去；播放更灵敏，暂停更悠缓
             let tau_up = 0.16 + (0.06 - 0.16) * pw;
             let tau_down = 0.42 + (0.20 - 0.42) * pw;
@@ -3903,7 +3926,7 @@ impl IslandApp {
         let row_h = 22.0f32;
         let lx0 = cx0 - disc_pad;
         // 歌词底部叠加一条「水波反射」频谱（仅叠加绘制，不改变歌词布局）
-        let wf_h = 46.0f32;
+        let wf_h = 50.0f32;
         let wf_rect = egui::Rect::from_min_max(
             egui::pos2(lx0, rect.bottom() - wf_h),
             egui::pos2(cx1, rect.bottom()),
