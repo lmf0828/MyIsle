@@ -919,6 +919,8 @@ struct IslandApp {
     last_title_at: Instant,
     /// 音乐模块显示程度 0..1：用于宽胶囊/内容/空态的平滑过渡动画
     music_amt: f32,
+    spec_h: Vec<f32>,
+    spec_lvl: f32,
     /// 最近一次显示过的歌词行号（滞回，避免边界处来回跳）
     lyr_idx_last: i32,
     /// 收起态歌词“上滚”动画：换行瞬间的时刻，以及上一句（滚出）的索引
@@ -1166,6 +1168,8 @@ impl IslandApp {
             last_title: None,
             last_title_at: Instant::now() - Duration::from_secs(60),
             music_amt: 0.0,
+            spec_h: Vec::new(),
+            spec_lvl: 0.0,
             lyr_idx_last: -1,
             lyr_anim_at: None,
             lyr_anim_from: None,
@@ -2937,7 +2941,7 @@ impl IslandApp {
 
     /// 歌词底部「水面反射」频谱：上方一组频谱灯柱，下方是随波纹横向荡开的倒影，
     /// 中间一条发光地平线。无真实 FFT 时用多条正弦叠加出有呼吸感的伪频谱（低频更强 + 拍点脉冲）。
-    fn draw_water_reflection(&self, painter: &egui::Painter, rect: egui::Rect, fill_rect: egui::Rect, br: f32, accent: egui::Color32, a: u8, t: f64) {
+    fn draw_water_reflection(&mut self, painter: &egui::Painter, rect: egui::Rect, fill_rect: egui::Rect, br: f32, accent: egui::Color32, a: u8, t: f64) {
         if rect.width() < 30.0 || rect.height() < 18.0 || a == 0 {
             return;
         }
@@ -2981,16 +2985,25 @@ impl IslandApp {
         let playing = self.is_playing();
         let lvl = crate::audio_meter::level().clamp(0.0, 1.0);
         let amt = self.music_amt.clamp(0.0, 1.0);
-        // 未播放时也保持一段缓慢“呼吸”的底噪，让频谱看起来是活的（随机、平缓地起伏）。
-        let idle_breath = 0.74 + 0.26 * ((t as f32 * 0.7).sin() * 0.5 + 0.5);
-        let energy = if playing {
-            (0.55 + 0.95 * (0.25 * amt + 0.75 * lvl)).min(1.30)
+
+        // —— 平滑驱动：每根柱子维护“当前高度”，用攻击/释放时间常数向目标靠拢；
+        //     目标来自多层连续正弦（行波 + 两层起伏），没有逐帧白噪声 → 丝滑浪涌而非抖动。——
+        if self.spec_h.len() != n {
+            self.spec_h = vec![2.0; n];
+        }
+        let dt = painter.ctx().input(|i| i.stable_dt).clamp(0.001, 0.05);
+        let idle_breath = 0.70 + 0.30 * ((t as f32 * 0.5).sin() * 0.5 + 0.5);
+        let target_lvl = if playing {
+            (0.32 + 0.85 * (0.30 * amt + 0.70 * lvl)).clamp(0.0, 1.15)
         } else {
-            1.00 * idle_breath
+            (0.58 + 0.42 * idle_breath).clamp(0.0, 1.0)
         };
-        let gain = if playing { 1.25 } else { 1.5 };
+        let lvl_tau = if playing { 0.12 } else { 0.45 };
+        let kl = 1.0 - (-dt / lvl_tau).exp();
+        self.spec_lvl += (target_lvl - self.spec_lvl) * kl;
+
         let tt = t as f32;
-        // 稳定的整数哈希→[0,1)，用于每根柱子的随机相位/幅度与逐帧小抖动
+        // 稳定整数哈希 → [0,1)，给每根柱子固定的相位/个体差异
         let hash01 = |mut x: u32| -> f32 {
             x ^= x >> 16;
             x = x.wrapping_mul(0x7feb_352d);
@@ -2999,48 +3012,36 @@ impl IslandApp {
             x ^= x >> 16;
             (x & 0xffff) as f32 / 65535.0
         };
-        let framef = (tt * 30.0) as u32;
-
-        // 不再叠加水面深色渐变，保持与音乐内容区同色。
 
         for i in 0..n {
             let f = i as f32 / (n as f32 - 1.0).max(1.0);
-            // 两侧强、中间弱的盆形包络：中间约 0.22，向外平滑抬到端部约 1.10
-            // （峰值别拉太夸，否则两端全撞上限→顶上一条平线）
             let d = ((f - 0.5).abs() * 2.0).clamp(0.0, 1.0);
             let env_bowl = {
                 let x = ((d - 0.28) / 0.72).clamp(0.0, 1.0);
                 0.22 + 0.88 * (x * x * (3.0 - 2.0 * x))
             };
-            // 未播放时把盆形压平一些：整排柱子都有明显起伏，而不是只有两端动、中间几乎贴地
-            let env = if playing { env_bowl } else { 0.45 + 0.55 * env_bowl };
-            let s0 = (tt * 7.2 + i as f32 * 1.7).sin() * 0.5 + 0.5; // 快频，抖动更鲜明
-            let s1 = (tt * 2.2 + i as f32 * 0.53).sin() * 0.5 + 0.5;
-            let s2 = (tt * 1.3 - i as f32 * 0.29 + 1.7).sin() * 0.5 + 0.5;
-            let s3 = (tt * 0.6 + i as f32 * 0.17 + 0.9).sin() * 0.5 + 0.5; // 慢速漂移，制造随机感
-            // 播放时快频与逐帧微抖更鲜明；未播放时以慢速漂移为主，保持“随机平缓地动”
-            let (w0, w1, w2, w3) = if playing {
-                (0.26f32, 0.34f32, 0.22f32, 0.18f32)
-            } else {
-                (0.08f32, 0.28f32, 0.30f32, 0.34f32)
-            };
-            // 每根柱子一个稳定的随机系数（0.55~1.50），相邻柱子差异明显
-            let jit = 0.55 + 0.95 * hash01(i as u32);
-            // 逐帧随机微抖：播放时 ±20% 更鲜活；暂停时 ±8% 更平缓
-            let flick = if playing {
-                0.80 + 0.40 * hash01((i as u32) ^ framef.wrapping_mul(2_654_435_761))
-            } else {
-                0.92 + 0.16 * hash01((i as u32) ^ framef.wrapping_mul(2_654_435_761))
-            };
-            let beat = ((tt * 3.5).sin() * 0.5 + 0.5).powi(4);
-            let raw = 0.16 + 0.84 * (s0 * w0 + s1 * w1 + s2 * w2 + s3 * w3);
-            // 两端可稍微更高一点（最多 +12%），中间严格受 max_h 约束在第五行歌词之下
+            let env = if playing { env_bowl } else { 0.42 + 0.58 * env_bowl };
+            let ph = hash01((i as u32).wrapping_mul(2_654_435_761)) * std::f32::consts::TAU;
+            // 三道连续波：一道从左向右缓慢扫过的行波 + 两层不同频率起伏 → 随机但连续的浪面
+            let wave = (tt * 1.55 - f * 6.2 + ph * 0.6).sin() * 0.5 + 0.5;
+            let w1 = (tt * 1.05 + ph * 1.3).sin() * 0.5 + 0.5;
+            let w2 = (tt * 2.35 + ph * 2.1).sin() * 0.5 + 0.5;
+            let noise = (0.55 * wave + 0.28 * w1 + 0.17 * w2).clamp(0.0, 1.0);
+            let jit = 0.62 + 0.62 * hash01((i as u32) ^ 0x9e37_79b9);
+            let raw = 0.18 + 0.82 * noise;
             let edge = 1.0 + 0.12 * d;
-            let amp = raw * env * jit * flick;
-            // 软饱和（指数逼近 1）替代硬 clamp：越高越难再长，但不会所有柱子一起被削成同一高度
-            let x = amp * energy * gain + beat * 0.14 * env;
-            let v = (1.0 - (-x).exp()).clamp(0.05, 0.985);
-            let hgt = (v * max_h * edge).max(1.5);
+            let drive = (raw * self.spec_lvl * env * jit * 1.15).clamp(0.0, 1.0);
+            let target_h = (max_h * edge * drive).max(1.5);
+            // 上涨快、回落慢 → 涌起后缓缓退去；播放更灵敏，暂停更悠缓
+            let tau = if target_h > self.spec_h[i] {
+                if playing { 0.06 } else { 0.16 }
+            } else {
+                if playing { 0.20 } else { 0.42 }
+            };
+            let k = 1.0 - (-dt / tau).exp();
+            self.spec_h[i] += (target_h - self.spec_h[i]) * k;
+            let hgt = self.spec_h[i].clamp(1.5, max_h * edge * 1.02);
+            let v = (hgt / (max_h * edge).max(1.0)).clamp(0.0, 1.0);
             let bx = x0 + i as f32 * (bw + gap);
 
             let base = lerp_color(egui::Color32::from_rgb(122, 236, 255), accent, (f * 0.9).clamp(0.0, 1.0));
