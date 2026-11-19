@@ -483,6 +483,9 @@ pub fn fetch_full(
     expected_dur: f64,
     soda: bool,
 ) -> (Option<Vec<LrcLine>>, Option<Vec<u8>>) {
+    if std::env::var_os("WINISLE_NOLYRIC").is_some() {
+        return (None, None);
+    }
     // 传进来的可能是可疑试听片段时长（<5s/0 表示未知）：若已知整首时长就用它，避免同一首歌
     // 在“片段桶”和“整首桶”里各缓存一份、且选错版本。
     let mut expected_dur = expected_dur;
@@ -604,7 +607,8 @@ fn fetch_remote(
     if soda {
         // 汽水歌曲：歌词只认汽水自己的官方数据，绝不跨源适配，从根上杜绝“把别首歌贴上来”。
         // 首选：通过 CDP 读渲染进程里 LyricsView 的官方歌词（含逐字时间，不需要显示歌词页）。
-        if let Some(sl) = crate::cdp_lyric::fetch_current(title, artist) {
+        // 用 no_nav 版本：绝不在用户浏览歌单/场景模式时强行把汽水切回播放页；读不到再走内存扫描兜底。
+        if let Some(sl) = crate::cdp_lyric::fetch_current_no_nav(title, artist) {
             let cover = if !sl.cover.is_empty() {
                 get_bytes(&sl.cover)
             } else {
@@ -655,26 +659,47 @@ fn fetch_remote(
             return (Some(l), cover);
         }
         dlog(&format!("soda none {} - {} (pure memory, no network)", title, artist));
+        // 汽水官方源拿不到（典型：停留在歌单/场景页，LyricsView 未挂载，内存也没扫到）时，
+        // 回退到网络歌词源（网易云/QQ/LRCLIB），但用「歌词末句时间 vs 实际时长」做校验，
+        // 时长对不上（同名不同歌/翻唱/片段）就丢弃，尽量避免把别的歌贴上来。
+        if std::env::var_os("WINISLE_SODA_NONETLYRIC").is_none() {
+            let (nl, nc) = fetch_remote_net(title, artist, expected_dur, key, dir);
+            if let Some(v) = nl {
+                let last = v.last().map(|l| l.t).unwrap_or(0.0);
+                let ok = if expected_dur >= 60.0 && last >= 1.0 {
+                    (last - expected_dur).abs() <= (expected_dur * 0.20).max(20.0)
+                } else {
+                    true
+                };
+                if ok && v.len() >= 2 {
+                    dlog(&format!("soda netlyric {} - {} lines={}", title, artist, v.len()));
+                    if let Some(d) = dir {
+                        let body: String = v
+                            .iter()
+                            .map(|x| format!("[{:02}:{:05.2}]{}\n", (x.t as u32) / 60, x.t % 60.0, x.text))
+                            .collect();
+                        let _ = std::fs::write(d.join(format!("{}.soda.lrc", key)), body);
+                    }
+                    return (Some(v), nc);
+                } else {
+                    dlog(&format!(
+                        "soda netlyric reject {} - {} last={:.1} exp={:.1}",
+                        title, artist, last, expected_dur
+                    ));
+                }
+            }
+        }
         let cover: Option<Vec<u8>> = None;
         return (None, cover);
     }
     fetch_remote_net(title, artist, expected_dur, key, dir)
 }
 
-/// 汽水歌词刚开播可能还没写进内存：短轮询几次（最多约 6 秒），让 汽水 有时间加载歌词。
+/// 汽水歌词刚开播可能还没写进内存。历史上的“单次请求内 3 次重扫”会与上层重试叠加成
+/// 数十次全量内存扫描（每次上限 ~1.5GB），是播放时 CPU 飙到一核的主因。现在改为单次读取，
+/// 由上层（带冷却/限次）负责重试，避免同一首歌被反复全量扫描。
 fn soda_read_with_retry(title: &str, artist: &str, expected_dur: f64) -> Option<Vec<LrcLine>> {
-    if expected_dur < 30.0 {
-        return crate::soda_lyrics::read_for(title, artist, expected_dur);
-    }
-    for attempt in 0..3 {
-        if let Some(l) = crate::soda_lyrics::read_for(title, artist, expected_dur) {
-            return Some(l);
-        }
-        if attempt < 2 {
-            std::thread::sleep(std::time::Duration::from_millis(1200));
-        }
-    }
-    None
+    crate::soda_lyrics::read_for(title, artist, expected_dur)
 }
 
 

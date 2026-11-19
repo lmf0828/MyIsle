@@ -401,6 +401,36 @@ pub fn read_for(title: &str, artist: &str, expected: f64) -> Option<Vec<LrcLine>
     if title.trim().is_empty() || expected < 30.0 {
         return None;
     }
+    if std::env::var_os("WINISLE_NOSODAMEM").is_some() {
+        return None;
+    }
+    // 全量内存扫描非常昂贵（最多读 ~1.5GB/进程）。同一首歌在冷却期内失败过就不再重复扫，
+    // 避免上层“切歌后多次重试”把 3×多次的重扫描叠加成持续满核 CPU。命中成功的歌词会写
+    // 成 .soda.lrc 在 lyrics 层直接缓存，故冷却只影响“确实读不到”的情形。
+    let tk = key_of(title);
+    let cooldown_ms = std::env::var("WINISLE_SODA_SCAN_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(10000);
+    {
+        use std::sync::Mutex;
+        static GATE: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+        if let Ok(mut g) = GATE.lock() {
+            if let Some((k, t)) = &*g {
+                if *k == tk && t.elapsed() < std::time::Duration::from_millis(cooldown_ms) {
+                    return None;
+                }
+            }
+            *g = Some((tk.clone(), std::time::Instant::now()));
+        }
+    }
+    if std::env::var_os("WINISLE_SODA_SCANLOG").is_some() {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(crate::paths::file("soda_scan.log")) {
+            use std::io::Write;
+            let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+            let _ = writeln!(f, "{} scan title={} expected={:.1}", ms, title, expected);
+        }
+    }
     let pids = soda_pids();
     if pids.is_empty() {
         return None;

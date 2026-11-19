@@ -253,6 +253,11 @@ fn read_track(s: &Session, fetch_props: bool) -> Track {
         .unwrap_or(false);
 
     // 真实时间轴（最小化到托盘也有）
+    // 注意：Position 只是「LastUpdatedTime 那一刻」的位置快照；不少播放器（如汽水）并不持续刷新它，
+    // raw Position 会长期冻结在同一个值。按 UWP 契约，播放中应做墙钟外推：
+    //   cur = Position + (now - LastUpdatedTime)
+    // 否则进度条/歌词会停在原地不跟手。
+    let mut last_upd_100: Option<i64> = None;
     if let Ok(tl) = s.GetTimelineProperties() {
         if let Ok(p) = tl.Position() {
             t.position = p.Duration as f64 / 1.0e7;
@@ -260,6 +265,25 @@ fn read_track(s: &Session, fetch_props: bool) -> Track {
         }
         if let Ok(e) = tl.EndTime() {
             t.duration = e.Duration as f64 / 1.0e7;
+        }
+        if let Ok(lu) = tl.LastUpdatedTime() {
+            last_upd_100 = Some(lu.UniversalTime);
+        }
+    }
+    if t.playing {
+        if let Some(l) = last_upd_100 {
+            if l > 0 {
+                // 100ns since 1601(共元) → 与 SystemTime(1970) 对齐：加 1601→1970 的偏移
+                let now100 = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| (d.as_nanos() / 100) as i64 + 116_444_736_000_000_000i64)
+                    .unwrap_or(0);
+                let dt = (now100 - l) as f64 / 1.0e7;
+                if dt > 0.0 && dt < 3600.0 {
+                    let cap = if t.duration > 1.0 { t.duration } else { f64::INFINITY };
+                    t.position = (t.position + dt).min(cap).max(0.0);
+                }
+            }
         }
     }
 
@@ -284,7 +308,9 @@ fn pick_session(m: &Mgr, prefer_app: &str) -> Option<Session> {
     match m.GetSessions() {
         Ok(list) => {
             let n = list.Size().unwrap_or(0);
-            dlog(&format!("sessions n={}", n));
+            if std::env::var_os("WINISLE_SMTC_LOG").is_some() {
+                dlog(&format!("sessions n={}", n));
+            }
             for i in 0..n {
                 if let Ok(s) = list.GetAt(i) {
                     let playing = s
@@ -297,6 +323,10 @@ fn pick_session(m: &Mgr, prefer_app: &str) -> Option<Session> {
                         .SourceAppUserModelId()
                         .map(|x| x.to_string())
                         .unwrap_or_default();
+                    // 只接受网易云 / 汽水，其它音源（浏览器视频等）直接跳过
+                    if !is_music_source(&app) {
+                        continue;
+                    }
                     if playing {
                         if !prefer_app.is_empty() && app == prefer_app {
                             return Some(s);
@@ -315,10 +345,29 @@ fn pick_session(m: &Mgr, prefer_app: &str) -> Option<Session> {
     let r = first_playing.or(first_any);
     if r.is_none() {
         if let Ok(s) = m.GetCurrentSession() {
-            return Some(s);
+            let app = s
+                .SourceAppUserModelId()
+                .map(|x| x.to_string())
+                .unwrap_or_default();
+            if is_music_source(&app) {
+                return Some(s);
+            }
         }
     }
     r
+}
+
+/// WinIsle 只接音乐模块，且只认「网易云音乐」和「汽水音乐」两个客户端；
+/// 其它音源（浏览器视频/网页播放、QQ音乐、Spotify、酷狗、酷我、系统播放器等）一律不采纳。
+/// 判定用 AUMID / exe 名里的关键字，与 main.rs 的 src_label / app_is_soda 保持一致。
+fn is_music_source(app: &str) -> bool {
+    let a = app.to_ascii_lowercase();
+    a.contains("cloudmusic")
+        || a.contains("netease")
+        || app.contains("网易云")
+        || a.contains("soda")
+        || a.contains("qishui")
+        || app.contains("汽水")
 }
 
 fn dlog(s: &str) {

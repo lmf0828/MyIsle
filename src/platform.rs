@@ -90,6 +90,12 @@ pub fn ensure_single_instance() -> bool {
 }
 
 const GWL_EXSTYLE: i32 = -20;
+const GWL_STYLE: i32 = -16;
+const WS_CAPTION: isize = 0x00C0_0000;
+const WS_THICKFRAME: isize = 0x0004_0000;
+const WS_SYSMENU: isize = 0x0008_0000;
+const WS_MINIMIZEBOX: isize = 0x0002_0000;
+const WS_MAXIMIZEBOX: isize = 0x0001_0000;
 const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
 const WS_EX_NOACTIVATE: isize = 0x0800_0000;
 const WS_EX_TRANSPARENT: isize = 0x0000_0020;
@@ -295,6 +301,14 @@ pub fn set_layered(hwnd: HWND) {
         SetLayeredWindowAttributes(hwnd, 0, 255, 0x0000_0002 /*LWA_ALPHA*/);
     }
 }
+/// 设置整窗不透明度（需已 WS_EX_LAYERED）。alpha=0 时整窗完全不可见（含所有内容），
+/// 用于启动阶段「先隐身、等首帧深色内容就绪后再显形」，避免空白/白底窗口一闪。
+pub fn set_window_alpha(hwnd: HWND, alpha: u8) {
+    if hwnd == 0 { return; }
+    unsafe {
+        SetLayeredWindowAttributes(hwnd, 0, alpha, 0x0000_0002 /*LWA_ALPHA*/);
+    }
+}
 /// 立即把窗口客户区同步刷成深色（用于"久置后第一次刷新"前预先盖住可能露出的白底）。
 pub fn fill_dark_now(hwnd: HWND) {
     if hwnd == 0 {
@@ -345,6 +359,7 @@ pub fn ensure_erase_guard(hwnd: HWND) {
 /// 同时每 8ms 重新断言一次，抵消 winit 在 set_outer_position/set_inner_size 时重置扩展样式。
 pub fn start_click_through_poller(hwnd: HWND) {
     if hwnd == 0 { return; }
+    if std::env::var_os("WINISLE_NOCTP").is_some() { return; }
     unsafe {
         if CLICK_POLL_STARTED.swap(1, Ordering::SeqCst) != 0 {
             return;
@@ -372,6 +387,13 @@ pub fn start_click_through_poller(hwnd: HWND) {
                     set_layered(hwnd);
                 }
                 let dragging = DRAGGING.load(Ordering::Relaxed) != 0;
+                // 兜底：某些环境下窗口创建后会被系统/winit 停留在隐藏状态（“岛不见了”）。
+                // 周期性检查，若不可见就重新显示（不抢焦点）。约每 320ms 一次。
+                if n % 40 == 0 && IsWindowVisible(hwnd) == 0 {
+                    show_island(hwnd);
+                }
+                // 周期/拖动时重新断言无边框样式，抵消跨 DPI 显示器移动时系统画回标题栏的问题
+                if dragging || (n % 12 == 0) { ensure_island_style(hwnd); }
                 let (px, py) = if fake_center {
                     let mut rc = RECT::default();
                     GetWindowRect(hwnd, &mut rc);
@@ -644,7 +666,6 @@ pub fn make_island(hwnd: HWND) {
         return;
     }
     unsafe {
-        // 扩展样式：工具窗口(无任务栏、无 Alt-Tab) + 不激活(不抢焦点)
         // 注：整个窗口的鼠标穿透不在这里做，而是用 WM_NCHITTEST 子类化：
         // 只有"岛体"区域接收鼠标(可抓取拖动)，其余透明边距穿透到桌面。
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -687,12 +708,106 @@ pub fn make_island(hwnd: HWND) {
     }
 }
 
+/// 主窗口句柄（供托盘线程唤醒/显示窗口使用）。
+static MAIN_HWND: AtomicI64 = AtomicI64::new(0);
+pub fn set_main_hwnd(h: HWND) { MAIN_HWND.store(h as i64, Ordering::Relaxed); }
+pub fn main_hwnd() -> i64 { MAIN_HWND.load(Ordering::Relaxed) }
+
+/// 显示并置顶岛体窗口（托盘「显示」/启动兜底调用）。不抢焦点、不激活。
+pub fn show_island(hwnd: HWND) {
+    if hwnd == 0 {
+        return;
+    }
+    unsafe {
+        // SW_SHOWNOACTIVATE = 4
+        ShowWindow(hwnd, 4);
+        // SWP_NOSIZE(1)|SWP_NOZORDER(4)|SWP_NOACTIVATE(0x10)|SWP_SHOWWINDOW(0x40)
+        SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0055);
+        // 再确保置顶（不重复设置时开销很小）
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        const WS_EX_TOPMOST: isize = 0x0000_0008;
+        if ex & WS_EX_TOPMOST == 0 {
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+}
+
+/// 窗口当前是否已真正显示在屏幕上（用来判定“首帧已呈现”的准确时刻，作为入场淡入的起点）。
+pub fn is_window_visible(hwnd: HWND) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    unsafe { IsWindowVisible(hwnd) != 0 }
+}
+
+/// 用 DWM 的 DWMWA_CLOAK(13) 把窗口从合成器临时摘除/恢复。
+/// 启动时先 cloak，等首帧深色内容真正 swap 出去后再取消 cloak，
+/// 可彻底避免「双击启动瞬间左上角闪一下白色空窗口」。
+pub fn set_cloak(hwnd: HWND, on: bool) {
+    if hwnd == 0 {
+        return;
+    }
+    let v: i32 = if on { 1 } else { 0 };
+    unsafe {
+        DwmSetWindowAttribute(hwnd, 13u32, &v as *const i32 as *const c_void, 4);
+    }
+}
+
+/// 兜底：跨显示器（不同 DPI 缩放）移动或 winit 重置样式时，系统可能把标题栏/边框/非客户区
+/// 重新画回来（拖动穿屏时会“卡出”一个带标题栏的白框）。这里把「无标题栏 + 工具窗口 + 不激活
+/// + 不渲染非客户区」重新断言一遍。开销很小，适合每帧/每轮调用。
+pub fn ensure_island_style(hwnd: HWND) {
+    if hwnd == 0 {
+        return;
+    }
+    // DWM 属性不必每帧重设（每次 DwmSetWindowAttribute 都会触发一次合成/重排，
+    // 拖动时每帧调用正是掉帧的主因）。样式一旦被系统改回去才重设一次。
+    static STYLE_READY: AtomicBool = AtomicBool::new(false);
+    unsafe {
+        let st = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let strip = WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+        let new_st = st & !strip;
+        if new_st != st {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, new_st);
+            // 通知系统重算非客户区（否则样式改了要等下一次尺寸变化才生效）
+            // SWP_NOSIZE(0x1)|SWP_NOMOVE(0x2)|SWP_NOZORDER(0x4)|SWP_NOACTIVATE(0x10)|SWP_FRAMECHANGED(0x20)
+            SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037);
+            STYLE_READY.store(false, Ordering::Relaxed);
+        }
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let new_ex = ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+        if new_ex != ex {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
+            STYLE_READY.store(false, Ordering::Relaxed);
+        }
+        if !STYLE_READY.load(Ordering::Relaxed) {
+            // 彻底关闭非客户区渲染（标题栏/边框/阴影都不画）
+            let ncrp: u32 = 1; // DWMNCRP_DISABLED
+            DwmSetWindowAttribute(hwnd, 2u32, &ncrp as *const u32 as *const c_void, 4);
+            // 关闭 Win11 圆角与可见边框
+            let corner = DWMWCP_DONOTROUND;
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const i32 as *const c_void, 4);
+            let no_border = DWMWA_COLOR_NONE;
+            DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &no_border as *const u32 as *const c_void, 4);
+            let zero: u32 = 0;
+            DwmSetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, &zero as *const u32 as *const c_void, 4);
+            STYLE_READY.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
 /// 重新置顶（某些全屏应用会把我们压下去后调用）。
 pub fn keep_on_top(hwnd: HWND) {
     if hwnd == 0 {
         return;
     }
     unsafe {
+        // 已经是 TOPMOST 就不用每帧再 SetWindowPos（重复置顶也会打断合成、掉帧）
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        const WS_EX_TOPMOST: isize = 0x0000_0008;
+        if ex & WS_EX_TOPMOST != 0 {
+            return;
+        }
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 }
@@ -832,16 +947,12 @@ unsafe extern "system" fn enum_media_cb(hwnd: HWND, l: isize) -> i32 {
     1
 }
 
-/// 扫描已知播放器（网易云/汽水/QQ音乐/Spotify/酷狗/酷我）的顶层窗口标题，
+/// 扫描已知播放器（仅网易云/汽水）的顶层窗口标题，
 /// 若形如 “歌名 - 歌手” 则返回 (exe 名, 歌名, 歌手)。仅作 SMTC 的兜底。
 pub fn media_title_fallback() -> Option<(String, String, String)> {
-    const ALLOW: [&str; 6] = [
+    const ALLOW: [&str; 2] = [
         "cloudmusic.exe",
         "sodamusic.exe",
-        "qqmusic.exe",
-        "spotify.exe",
-        "kugou.exe",
-        "kuwo.exe",
     ];
     let mut v: Vec<(u32, String)> = Vec::new();
     unsafe {
@@ -1130,7 +1241,7 @@ fn pids_named(name: &str) -> Vec<u32> {    let mut out = Vec::new();
     }
     out
 }
-/// 是否有已知播放器进程在运行（网易云/汽水/QQ音乐/Spotify/酷狗/酷我）。
+/// 是否有已知播放器进程在运行（仅网易云/汽水）。
 /// 注意：这里用 exe 文件名粗判，可能有极短误判窗口，但足以用来决定“该不该保留上次的歌名”。
 pub fn player_running() -> bool {
     static WATCH: std::sync::Once = std::sync::Once::new();
@@ -1146,13 +1257,9 @@ pub fn player_running() -> bool {
 static PLAYER_RUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn player_running_now() -> bool {
-    const NAMES: [&str; 6] = [
+    const NAMES: [&str; 2] = [
         "cloudmusic.exe",
         "sodamusic.exe",
-        "qqmusic.exe",
-        "spotify.exe",
-        "kugou.exe",
-        "kuwo.exe",
     ];
     // 只做一次进程快照，避免对每个名字都枚举一遍（原来 6 次快照单帧要 50~80ms）。
     unsafe {

@@ -6,7 +6,9 @@
 //!
 //! 本模块只负责“取数 + 解析 + 缓存”，不碰 UI；由 main.rs 的后台线程调用。
 
+use std::collections::HashMap;
 use std::io::Read;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// 程序化天气图标种类（与 UI 的绘制函数一一对应）。
@@ -38,7 +40,7 @@ pub struct Day {
     pub notice: String,
 }
 
-/// 一个 3 小时粒度的预报点（来自 7timer，用于展开页「未来 24 小时」横条）。
+/// 一个 3 小时粒度的预报点（优先中国天气网 hour3data，回退 7timer；用于展开页「未来 24 小时」横条）。
 #[derive(Clone, Debug)]
 pub struct Hour {
     pub label: String, // 本地时钟，如 "14:00"
@@ -235,8 +237,19 @@ pub fn parse_itboy(root: &serde_json::Value) -> Option<Weather> {
     Some(w)
 }
 
+/// 自动定位得到的区县代码 -> 精确经纬度（供 7timer 逐小时使用，进程内缓存）。
+fn coord_cache() -> &'static Mutex<HashMap<String, (f64, f64)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (f64, f64)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// 城市 key -> (纬度, 经度)，供 7timer 请求使用。全球地点自带坐标。
 fn city_coords(key: &str) -> Option<(f64, f64)> {
+    if let Ok(cache) = coord_cache().lock() {
+        if let Some(&c) = cache.get(key) {
+            return Some(c);
+        }
+    }
     if let Some(rest) = key.strip_prefix("geo:") {
         let mut it = rest.split(',');
         let lat = it.next()?.trim().parse::<f64>().ok()?;
@@ -608,10 +621,94 @@ fn haversine(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     2.0 * r * a.sqrt().asin()
 }
 
-/// 自动定位：用 ip-api（免费、无 key、中文）拿当前城市，再解析成天气城市代码。
-/// 优先用中国天气网城市搜索匹配到具体城市/区县；匹配不到则用经纬度走全球数据。
-/// 全部失败返回 None（调用方兜底北京）。
+/// Windows 定位服务（GPS / Wi-Fi）拿精确经纬度；无权限或失败返回 None。
+fn windows_coords() -> Option<(f64, f64)> {
+    use windows::Devices::Geolocation::{GeolocationAccessStatus, Geolocator, PositionAccuracy};
+    // 工作线程里调用 WinRT 需要先初始化 COM（MTA 足够）。
+    unsafe {
+        let _ = windows::Win32::System::Com::CoInitializeEx(
+            None,
+            windows::Win32::System::Com::COINIT_MULTITHREADED,
+        );
+    }
+    let access = Geolocator::RequestAccessAsync().ok()?.get().ok()?;
+    if access != GeolocationAccessStatus::Allowed {
+        return None;
+    }
+    let locator = Geolocator::new().ok()?;
+    let _ = locator.SetDesiredAccuracy(PositionAccuracy::High);
+    let pos = locator.GetGeopositionAsync().ok()?.get().ok()?;
+    let p = pos.Coordinate().ok()?.Point().ok()?.Position().ok()?;
+    if p.Latitude.abs() < 0.01 && p.Longitude.abs() < 0.01 {
+        return None;
+    }
+    Some((p.Latitude, p.Longitude))
+}
+
+/// 经纬度 -> 区县名（BigDataCloud 反向地理编码，免费无 key）。
+fn reverse_district(lat: f64, lon: f64) -> Option<String> {
+    let url = format!(
+        "https://api.bigdatacloud.net/data/reverse-geocode-client?latitude={:.6}&longitude={:.6}&localityLanguage=zh",
+        lat, lon
+    );
+    let text = http_get_text(&url, None, 3000, 6000, 256 * 1024)?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let city = v.get("city").and_then(|x| x.as_str()).unwrap_or("").trim();
+    let locality = v.get("locality").and_then(|x| x.as_str()).unwrap_or("").trim();
+    // locality 在上海等直辖市就是区名；若与 city 相同则再从 administrative 里取最细一级
+    if !locality.is_empty() && locality != city {
+        return Some(locality.to_string());
+    }
+    if let Some(arr) = v
+        .get("localityInfo")
+        .and_then(|x| x.get("administrative"))
+        .and_then(|x| x.as_array())
+    {
+        let mut best: Option<(i64, String)> = None;
+        for it in arr {
+            let name = it.get("name").and_then(|x| x.as_str()).unwrap_or("").trim();
+            let level = it.get("adminLevel").and_then(|x| x.as_i64()).unwrap_or(0);
+            if name.is_empty() {
+                continue;
+            }
+            if best.as_ref().map_or(true, |(l, _)| level >= *l) {
+                best = Some((level, name.to_string()));
+            }
+        }
+        if let Some((_, name)) = best {
+            if name != city {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+/// 在搜索结果里挑出最贴近目标区县名的命中（优先同名 / 去后缀同名）。
+fn pick_district_hit(q: &str, hits: &[CityHit]) -> Option<CityHit> {
+    let base = q.trim_end_matches(|c| c == '市' || c == '区' || c == '县');
+    hits.iter()
+        .find(|h| h.name == q)
+        .or_else(|| hits.iter().find(|h| h.name == base))
+        .or_else(|| hits.iter().find(|h| h.name.contains(base) && !base.is_empty()))
+        .cloned()
+}
+
+/// 自动定位：优先 Windows 系统定位（GPS/Wi-Fi，可到区县），
+/// 反查区县名后匹配中国天气网区级代码；失败再用 ip-api 城市级定位兜底。
 pub fn locate() -> Option<(String, String)> {
+    if let Some((lat, lon)) = windows_coords() {
+        if let Some(district) = reverse_district(lat, lon) {
+            let hits = search_china(&district);
+            if let Some(hit) = pick_district_hit(&district, &hits) {
+                if let Ok(mut cache) = coord_cache().lock() {
+                    cache.insert(hit.key.clone(), (lat, lon));
+                }
+                return Some((hit.name, hit.key));
+            }
+        }
+    }
+
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(3))
         .timeout_read(Duration::from_secs(5))
@@ -747,8 +844,77 @@ fn parse_7timer(root: &serde_json::Value) -> Vec<Hour> {
     out
 }
 
-/// 拉取未来 24 小时（3h）预报；任何失败都静默返回空，不阻塞主流程。
+/// 解析中国天气网「1 天」页内嵌的 `var hour3data={...}`，取未来 24 小时（3 小时粒度）。
+/// 数据形如 `19日11时,d02,阴,10℃,西北风,<3级,3`，国内官方、无需 key。
+fn parse_hour3data(text: &str) -> Vec<Hour> {
+    let Some(i) = text.find("var hour3data=") else {
+        return Vec::new();
+    };
+    let rest = &text[i + "var hour3data=".len()..];
+    let Some(j) = rest.find("</script>") else {
+        return Vec::new();
+    };
+    let json = rest[..j].trim().trim_end_matches(';').trim();
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(arr) = root.get("1d").and_then(|x| x.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in arr {
+        let Some(s) = it.as_str() else { continue };
+        let parts: Vec<&str> = s.split(',').collect();
+        if parts.len() < 4 {
+            continue;
+        }
+        let time = parts[0].trim(); // "19日11时"
+        let code = parts[1].trim(); // d02 / n01
+        let desc = parts[2].trim(); // 阴 / 多云 / 晴
+        let temp = parse_temp_text(parts[3]).unwrap_or(0);
+        let hour: u32 = time
+            .find('时')
+            .map(|p| &time[..p])
+            .and_then(|x| x.rsplit('日').next())
+            .and_then(|h| h.trim().parse().ok())
+            .unwrap_or(0);
+        let is_night = code.starts_with('n') || hour >= 18 || hour < 6;
+        out.push(Hour {
+            label: format!("{:02}:00", hour),
+            temp,
+            sky: sky_of(desc, is_night),
+        });
+        if out.len() >= 8 {
+            break;
+        }
+    }
+    out
+}
+
+/// 拉取中国天气网 1 天页的逐 3 小时预报（仅 9 位国内城市代码可用）。
+fn fetch_hours_cn(city_key: &str) -> Vec<Hour> {
+    if city_key.len() != 9 || !city_key.bytes().all(|b| b.is_ascii_digit()) {
+        return Vec::new();
+    }
+    let url = format!("http://www.weather.com.cn/weather1d/{}.shtml", city_key);
+    let Some(text) = http_get_text(
+        &url,
+        Some("http://www.weather.com.cn/"),
+        3000,
+        6000,
+        300 * 1024,
+    ) else {
+        return Vec::new();
+    };
+    parse_hour3data(&text)
+}
+
+/// 拉取未来 24 小时（3h）预报；优先国内中国天气网，失败回退 7timer，任何失败都静默返回空。
 fn fetch_hours(city_key: &str) -> Vec<Hour> {
+    let cn = fetch_hours_cn(city_key);
+    if !cn.is_empty() {
+        return cn;
+    }
     let Some((lat, lon)) = city_coords(city_key) else {
         return Vec::new();
     };
@@ -924,6 +1090,19 @@ mod tests {
     }
 
     #[test]
+    fn hour3data_parsing() {
+        let sample = "<script>var hour3data={\"1d\":[\"19日11时,d02,阴,10℃,西北风,<3级,3\",\"19日14时,d02,阴,11℃,西北风,<3级,3\",\"19日20时,n02,阴,9℃,西风,<3级,0\",\"20日02时,n01,多云,7℃,西北风,<3级,0\",\"20日08时,d01,多云,6℃,西风,<3级,2\"]};</script>";
+        let h = parse_hour3data(sample);
+        assert_eq!(h.len(), 5);
+        assert_eq!(h[0].label, "11:00");
+        assert_eq!(h[0].temp, 10);
+        assert_eq!(h[0].sky, Sky::Cloud);
+        assert_eq!(h[2].sky, Sky::Cloud); // 夜间阴
+        assert_eq!(h[3].label, "02:00");
+        assert_eq!(h[4].sky, Sky::Partly);
+    }
+
+    #[test]
     fn seven_timer_mapping() {
         assert_eq!(sky_from_7timer("clearday").0, Sky::Sun);
         assert_eq!(sky_from_7timer("clearnight").0, Sky::Night);
@@ -952,8 +1131,9 @@ mod tests {
         assert!(!hits.is_empty(), "city search should return results");
         let w = fetch("101020100").expect("live fetch should succeed");
         eprintln!(
-            "live Shanghai: city={} temp={} quality={} pm25={} updated={} days={} hours={}",
-            w.city, w.temp, w.quality, w.pm25, w.updated, w.days.len(), w.hours.len()
+            "live Shanghai: city={} temp={} quality={} pm25={} updated={} days={} hours={} first_hours={:?}",
+            w.city, w.temp, w.quality, w.pm25, w.updated, w.days.len(), w.hours.len(),
+            w.hours.iter().take(3).map(|h| (&h.label, h.temp)).collect::<Vec<_>>()
         );
         assert!(w.temp > -60.0 && w.temp < 60.0);
     }
@@ -973,5 +1153,12 @@ mod tests {
             w.days.first().map(|d| (&d.date, d.high, d.low, &d.day_type, &d.week))
         );
         assert!(!w.days.is_empty(), "geo daily forecast should not be empty");
+    }
+
+    /// 联网核查自动定位（默认忽略）。
+    #[test]
+    #[ignore]
+    fn live_locate() {
+        eprintln!("locate -> {:?}", locate());
     }
 }

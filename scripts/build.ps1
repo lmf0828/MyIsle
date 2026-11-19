@@ -13,6 +13,12 @@ if ($Deploy) {
     for ($i = 0; $i -lt 25 -and (Get-Process WinIsle -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 200 }
     if (Get-Process WinIsle -ErrorAction SilentlyContinue) { throw "WinIsle 进程未退出，无法覆盖 exe" }
     Copy-Item $exe 'D:\LingDao\WinIsle.exe' -Force
+    # 关键：清掉当前 shell 里可能残留的 WINISLE_* 调试开关，避免被 Start-Process 继承。
+    # 之前别的会话调休图时设过 WINISLE_FORCE_EXPAND=1，之后 build.ps1 重启时把它一并继承，
+    # 导致新启动的岛被永久强制展开、无法收起（水波频谱当时只是被冤枉的“嫌疑人”）。
+    Get-ChildItem Env: | Where-Object { $_.Name -like 'WINISLE_*' } | ForEach-Object {
+        Remove-Item -Path ('Env:' + $_.Name) -ErrorAction SilentlyContinue
+    }
     Start-Process 'D:\LingDao\WinIsle.exe'
     "deployed & restarted"
 }

@@ -249,6 +249,93 @@ fn norm(s: &str) -> String {
 
 /// 读取当前在播歌曲的官方歌词。`title`/`artist` 用于防止切歌瞬间读到上一首。
 pub fn fetch_current(title: &str, artist: &str) -> Option<SodaLyric> {
+    fetch_current_inner(title, artist, true)
+}
+
+/// 同 `fetch_current`，但绝不切换汽水内部路由（用于后台轮询“正在播放”，避免干扰用户浏览页面）。
+pub fn fetch_current_no_nav(title: &str, artist: &str) -> Option<SodaLyric> {
+    fetch_current_inner(title, artist, false)
+}
+
+/// 从底部播放条 `.bottom-player` 读取当前曲目（歌名/歌手/时长）。
+/// 该播放条在「正在播放页」「歌单/场景模式」等几乎所有页面都常驻，因此即使
+/// LyricsView 未挂载（用户切到歌单/场景模式）也能识别到当前歌曲，不依赖 SMTC。
+pub fn fetch_bottom_player() -> Option<SodaLyric> {
+    let expr = r#"(()=>{
+      try{
+        const bp=document.querySelector('.bottom-player');
+        if(!bp) return {ok:false};
+        const t=bp.querySelector('.track .title');
+        const a=bp.querySelector('.track .artist-link');
+        const name=t?(t.textContent||'').trim():'';
+        if(!name) return {ok:false};
+        const tip=bp.querySelector('.indicator')||bp.querySelector('.slider-tip');
+        let dur=0;
+        if(tip){const m=(tip.textContent||'').match(/(\d+):(\d+)\s*\/\s*(\d+):(\d+)/); if(m){dur=(+m[3])*60+(+m[4]);}}
+        const ci=bp.querySelector('.track .cover img');
+        const cover=ci?(ci.src||''):'';
+        return {ok:true,name:name,artist:a?(a.textContent||'').trim():'',duration:dur,cover:cover};
+      }catch(e){return {ok:false};}
+    })()"#;
+    let v = evaluate(expr)?;
+    let o = v.get("result")?.get("result")?.get("value")?;
+    if o.get("ok").and_then(|x| x.as_bool()) != Some(true) {
+        return None;
+    }
+    let name = o
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return None;
+    }
+    Some(SodaLyric {
+        name,
+        artist: o.get("artist").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        duration: o.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        content: String::new(),
+        cn: String::new(),
+        cover: o.get("cover").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+    })
+}
+
+/// 只读底部播放条的「播放态 + 实时进度」，不要求有歌名（歌单/场景页底部条常无标题）。
+/// 播放态用中间大按钮图标判定：暂停双竖条 `M9 7.8…` = 正在播放；播放三角 `M11 40.407…` = 已暂停。
+/// 进度用 `.slider-fill` 的宽度百分比（亚秒级实时；`.slider-tip` 文本是滞后的悬停提示，不能用）。
+pub fn fetch_play_state() -> Option<(bool, f64, f64)> {
+    let expr = r#"(()=>{
+      try{
+        const bp=document.querySelector('.bottom-player');
+        if(!bp) return {ok:false};
+        const tip=bp.querySelector('.indicator')||bp.querySelector('.slider-tip');
+        let dur=0;
+        if(tip){const m=(tip.textContent||'').match(/(\d+):(\d+)\s*\/\s*(\d+):(\d+)/); if(m){dur=(+m[3])*60+(+m[4]);}}
+        const fill=bp.querySelector('.slider-fill');
+        let pct=-1;
+        if(fill){const w=(fill.style.width||'').replace('%',''); const f=parseFloat(w); if(!isNaN(f)) pct=f;}
+        const btn=bp.querySelector('.controls.center .button.large');
+        let playing=false;
+        if(btn){const p=btn.querySelector('path'); const d=p?(p.getAttribute('d')||''):''; playing=/^M9\s*7\.8/.test(d);}
+        const cur = (dur>0 && pct>=0)? dur*pct/100.0 : -1;
+        return {ok:true, dur:dur, cur:cur, playing:playing};
+      }catch(e){return {ok:false};}
+    })()"#;
+    let v = evaluate(expr)?;
+    let o = v.get("result")?.get("result")?.get("value")?;
+    if o.get("ok").and_then(|x| x.as_bool()) != Some(true) {
+        return None;
+    }
+    let dur = o.get("duration").and_then(|x| x.as_f64())
+        .or_else(|| o.get("dur").and_then(|x| x.as_f64()))
+        .unwrap_or(0.0);
+    let cur = o.get("cur").and_then(|x| x.as_f64()).unwrap_or(-1.0);
+    let playing = o.get("playing").and_then(|x| x.as_bool()).unwrap_or(false);
+    Some((playing, cur, dur))
+}
+
+fn fetch_current_inner(title: &str, artist: &str, allow_nav: bool) -> Option<SodaLyric> {
     let want_t = norm(title);
     let mut result = None;
     for attempt in 0..4 {
@@ -288,7 +375,7 @@ pub fn fetch_current(title: &str, artist: &str) -> Option<SodaLyric> {
         }
         // 绝不移动/隐藏/显示汽水窗口（任何窗口操作都可能让客户端异常）。
         // 仅在需要时把汽水内部路由切到播放页，让 Vue 的 LyricsView 挂载；窗口本身一动不动。
-        if retry && attempt == 0 {
+        if retry && allow_nav && attempt == 0 {
             let _ = evaluate(NAV_PLAYER_EXPR);
             std::thread::sleep(Duration::from_millis(900));
         } else if retry && attempt < 3 {
@@ -304,12 +391,18 @@ const NAV_PLAYER_EXPR: &str = r#"(()=>{try{const p={enter_method:'click_player_i
 const PROG_EXPR: &str = r#"(()=>{
   const bp=document.querySelector('.bottom-player');
   if(!bp) return null;
-  const th=bp.querySelector('.slider-thumb');
-  const tr=bp.querySelector('.slider-track');
-  const ind=bp.querySelector('.indicator');
+  const tip=bp.querySelector('.indicator')||bp.querySelector('.slider-tip');
   let pct=null;
-  if(th&&tr){const b=th.getBoundingClientRect();const t=tr.getBoundingClientRect();if(t.width>0){pct=(b.left+b.width*0.5-t.left)/t.width*100.0;}}
-  return {pct:pct, text: ind?ind.innerText:''};
+  // 进度优先取 `.slider-fill` 的 style width%（亚秒级实时推进；`.slider-thumb` 在歌单/场景页可能不存在）
+  const fill=bp.querySelector('.slider-fill');
+  if(fill){const w=(fill.getAttribute('style')||'').match(/width:\s*([\d.]+)%/); if(w){pct=parseFloat(w[1]);}}
+  // 次选 `.slider-dot` 的 left%
+  if(pct===null){const dot=bp.querySelector('.slider-dot'); if(dot){const l=(dot.getAttribute('style')||'').match(/left:\s*([\d.]+)%/); if(l){pct=parseFloat(l[1]);}}}
+  // 再次退回 thumb/track 的位置比例
+  if(pct===null){const th=bp.querySelector('.slider-thumb');const tr=bp.querySelector('.slider-track');
+    if(th&&tr){const b=th.getBoundingClientRect();const t=tr.getBoundingClientRect();if(t.width>0){pct=(b.left+b.width*0.5-t.left)/t.width*100.0;}}}
+  // 注意：`.slider-tip` 是隐藏的悬停提示，innerText 在 display:none 时为空，必须用 textContent
+  return {pct:pct, text: tip?tip.textContent:''};
 })()"#;
 
 fn mmss(s: &str) -> Option<f64> {
@@ -323,14 +416,41 @@ fn mmss(s: &str) -> Option<f64> {
 /// 总时长读播放条 `.indicator` 的 `当前 / 总长` 文本（真实值）；
 /// 当前秒数优先用进度条填充比例 `.slider-fill` 的 width%（亚秒精度，避免整秒跳变导致
 /// 逐字高亮“唱过去了又退回一两个字”），失败再退回 `.indicator` 的整秒。
+/// 通过 CDP 点击汽水播放器上的按钮，实现上一曲 / 播放暂停 / 下一曲。
+/// `cmd`: "prev" | "play" | "next"（"play" 即切换播放/暂停）。返回是否点击成功。
+pub fn control(cmd: &str) -> bool {
+    let pick = match cmd {
+        "prev" => "document.querySelectorAll('.bottom-player .controls.center .button')[0]",
+        "next" => "document.querySelectorAll('.bottom-player .controls.center .button')[2]",
+        _ => "document.querySelector('.bottom-player .controls.center .button.large')",
+    };
+    let expr = format!(
+        "(()=>{{try{{const b={pick};if(!b)return false;b.click();return true;}}catch(e){{return false;}}}})()"
+    );
+    evaluate(&expr)
+        .and_then(|v| v.get("result")?.get("result")?.get("value")?.as_bool())
+        .unwrap_or(false)
+}
+
 pub fn fetch_progress(_expected_dur: f64) -> Option<(f64, f64)> {
-    let v = evaluate(PROG_EXPR)?;
+    let v = match evaluate(PROG_EXPR) {
+        Some(v) => v,
+        None => {
+            if std::env::var_os("WINISLE_SODAPROG_LOG").is_some() {
+                dlog("prog eval none");
+            }
+            return None;
+        }
+    };
     let obj = v.get("result")?.get("result")?.get("value")?;
     if obj.is_null() {
         return None;
     }
     let pct = obj.get("pct").and_then(|x| x.as_f64());
     let text = obj.get("text").and_then(|x| x.as_str()).unwrap_or("");
+    if std::env::var_os("WINISLE_SODAPROG_LOG").is_some() {
+        dlog(&format!("prog pct={:?} text={:?}", pct, text));
+    }
     let toks: Vec<&str> = text.split_whitespace().collect();
     let mut pair: Option<(f64, f64)> = None;
     for w in toks.windows(3) {
@@ -344,8 +464,23 @@ pub fn fetch_progress(_expected_dur: f64) -> Option<(f64, f64)> {
         }
     }
     let (cur0, total) = pair?;
+    // 进度以进度条填充比例 pct 为准（亚秒精度、随播放实时推进）。
+    // 说明：`.slider-tip` 的“当前时间”文本常常是静态/滞后的（只在悬停时更新），
+    // 之前拿它做“合理性校验”会把实时 pct 误判为异常、退回静止的文本秒数，
+    // 导致歌词高亮与真实播放位置越差越远（“歌词跟不上”）。改为优先 pct×总时长，
+    // pct 不可用时才退回文本秒数。
+    // 当前秒数：以 `.indicator` 的整秒为基准（真实、每秒刷新），若 pct 折算出的亚秒位置与整秒
+    // 相差 ≤1.5s（说明 pct 与显示秒一致、只是更精细）则用 pct 的亚秒值，令歌词逐字更贴合；
+    // 若 pct 明显偏离（pct 只有 1% 粒度≈2~3s、偶尔滞后/在缓冲位），则退回整秒，避免被粗粒度带偏。
     let cur = match pct {
-        Some(p) if p.is_finite() && p >= 0.0 && p <= 100.5 => (total * p / 100.0).clamp(0.0, total),
+        Some(p) if p.is_finite() && p >= 0.0 && p <= 100.5 && total > 1.0 => {
+            let pc = (total * p / 100.0).clamp(0.0, total);
+            if (pc - cur0).abs() <= 1.5 {
+                pc
+            } else {
+                cur0
+            }
+        }
         _ => cur0,
     };
     Some((cur, total))

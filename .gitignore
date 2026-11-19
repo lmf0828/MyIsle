@@ -18,3 +18,8 @@
 /data_uitest
 
 /WinIsle.exe
+
+# 调试截图 / 日志（不入库）
+/docs/img
+*.log
+
