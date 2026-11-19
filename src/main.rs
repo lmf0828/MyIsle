@@ -2972,30 +2972,43 @@ impl IslandApp {
         let bw = (((x1 - x0) - gap * (n as f32 - 1.0)) / n as f32).max(1.0);
 
         let playing = self.is_playing();
-        let lvl = crate::audio_meter::level();
+        let lvl = crate::audio_meter::level().clamp(0.0, 1.0);
+        let amt = self.music_amt.clamp(0.0, 1.0);
+        // 未播放时也保持一段缓慢“呼吸”的底噪，让频谱看起来是活的（随机、平缓地起伏）。
+        let idle_breath = 0.74 + 0.26 * ((t as f32 * 0.7).sin() * 0.5 + 0.5);
         let energy = if playing {
-            0.35 + 1.05 * (0.30 * self.music_amt.clamp(0.0, 1.0) + 0.70 * lvl)
+            (0.55 + 0.95 * (0.25 * amt + 0.75 * lvl)).min(1.30)
         } else {
-            0.28
+            1.00 * idle_breath
         };
+        let gain = if playing { 1.25 } else { 1.5 };
         let tt = t as f32;
 
         // 不再叠加水面深色渐变，保持与音乐内容区同色。
 
         for i in 0..n {
             let f = i as f32 / (n as f32 - 1.0).max(1.0);
-            // 两侧强、中间弱的盆形包络（对齐 HTML 单效果版）：
-            // 中间 ~0.20，最外 30% 开始抬升，两端到 ~1.22
+            // 两侧强、中间弱的盆形包络：中间约 0.22，向外平滑抬到端部约 1.10
+            // （峰值别拉太夸，否则两端全撞上限→顶上一条平线）
             let d = ((f - 0.5).abs() * 2.0).clamp(0.0, 1.0);
-            let env = {
-                let x = ((d - 0.30) / 0.70).clamp(0.0, 1.0);
-                0.20 + 1.02 * (x * x * (3.0 - 2.0 * x))
+            let env_bowl = {
+                let x = ((d - 0.28) / 0.72).clamp(0.0, 1.0);
+                0.22 + 0.88 * (x * x * (3.0 - 2.0 * x))
             };
+            // 未播放时把盆形压平一些：整排柱子都有明显起伏，而不是只有两端动、中间几乎贴地
+            let env = if playing { env_bowl } else { 0.45 + 0.55 * env_bowl };
             let s1 = (tt * 2.2 + i as f32 * 0.53).sin() * 0.5 + 0.5;
             let s2 = (tt * 1.3 - i as f32 * 0.29 + 1.7).sin() * 0.5 + 0.5;
+            let s3 = (tt * 0.6 + i as f32 * 0.17 + 0.9).sin() * 0.5 + 0.5; // 慢速漂移，制造随机感
+            // 每根柱子一个稳定的随机系数，避免相邻柱子高度“整齐划一”
+            let seed = (i as u32).wrapping_mul(2_654_435_761);
+            let jit = 0.85 + 0.30 * (((seed >> 9) & 255) as f32 / 255.0);
             let beat = ((tt * 3.5).sin() * 0.5 + 0.5).powi(4);
-            let raw = 0.30 + 0.70 * (s1 * 0.62 + s2 * 0.38);
-            let v = (raw * env * energy * 1.35 + beat * 0.14 * env).clamp(0.0, 1.0);
+            let raw = 0.24 + 0.76 * (s1 * 0.50 + s2 * 0.30 + s3 * 0.20);
+            let amp = raw * env * jit;
+            // 软饱和（指数逼近 1）替代硬 clamp：越高越难再长，但不会所有柱子一起被削成同一高度
+            let x = amp * energy * gain + beat * 0.10 * env;
+            let v = (1.0 - (-x).exp()).clamp(0.05, 0.97);
             let hgt = (v * max_h).max(1.5);
             let bx = x0 + i as f32 * (bw + gap);
 
@@ -6186,7 +6199,8 @@ impl eframe::App for IslandApp {
             self.music.title = t;
             self.music.artist = ar;
             self.music.app_id = std::env::var("WINISLE_DEMO_APP").unwrap_or_else(|_| "cloudmusic.exe".into());
-            self.music.playing = true;
+            let demo_paused = std::env::var_os("WINISLE_DEMO_PAUSED").is_some();
+            self.music.playing = !demo_paused;
             self.music.position = 42.0;
             self.music.duration = 240.0;
             self.music.has_position = true;
@@ -6196,7 +6210,7 @@ impl eframe::App for IslandApp {
                 }
             }
             self.from_smtc = false;
-            self.ui_playing = true;
+            self.ui_playing = !demo_paused;
         }
         // 以 SMTC 真实 Position 作为歌词/进度时间基准（最小化到托盘也有效）。
         // 关键点：像汽水音乐这类播放器会【一直上报同一个静止 position】（haspos=true 但数值不变），
