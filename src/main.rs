@@ -2942,7 +2942,13 @@ impl IslandApp {
             return;
         }
         let zero_r = egui::CornerRadius { nw: 0, ne: 0, sw: 0, se: 0 };
-        let clip = painter.with_clip_rect(fill_rect);
+        // 允许柱子向上探出频谱带一点点（进入歌词与频谱之间的空隙），但仍安全停在第五行歌词之下。
+        let over = 4.0f32;
+        let clip_rect = egui::Rect::from_min_max(
+            egui::pos2(fill_rect.left(), rect.top() - over),
+            fill_rect.max,
+        );
+        let clip = painter.with_clip_rect(clip_rect);
         let uv = egui::epaint::WHITE_UV;
         let grad_rect = |p: &egui::Painter, r: egui::Rect, top: egui::Color32, bot: egui::Color32| {
             if r.width() <= 0.0 || r.height() <= 0.0 {
@@ -2964,8 +2970,9 @@ impl IslandApp {
         let pad_x = 2.0f32;
         let x0 = fill_rect.left() + pad_x;
         let x1 = fill_rect.right() - pad_x;
-        let horizon = rect.top() + rect.height() * 0.55;
-        let max_h = (horizon - rect.top() - 2.0).max(2.0);
+        // 地平线略下移（0.55→0.60），给上方灯柱更多生长空间；倒影仍在下方。
+        let horizon = rect.top() + rect.height() * 0.60;
+        let max_h = (horizon - (rect.top() - over) - 2.0).max(2.0);
         let refl_depth = (rect.bottom() - horizon - 1.0).max(2.0);
         let n = (((x1 - x0) / 7.0).floor() as usize).clamp(20, 72);
         let gap = 2.0f32;
@@ -2983,6 +2990,16 @@ impl IslandApp {
         };
         let gain = if playing { 1.25 } else { 1.5 };
         let tt = t as f32;
+        // 稳定的整数哈希→[0,1)，用于每根柱子的随机相位/幅度与逐帧小抖动
+        let hash01 = |mut x: u32| -> f32 {
+            x ^= x >> 16;
+            x = x.wrapping_mul(0x7feb_352d);
+            x ^= x >> 15;
+            x = x.wrapping_mul(0x846c_a68b);
+            x ^= x >> 16;
+            (x & 0xffff) as f32 / 65535.0
+        };
+        let framef = (tt * 30.0) as u32;
 
         // 不再叠加水面深色渐变，保持与音乐内容区同色。
 
@@ -2997,19 +3014,33 @@ impl IslandApp {
             };
             // 未播放时把盆形压平一些：整排柱子都有明显起伏，而不是只有两端动、中间几乎贴地
             let env = if playing { env_bowl } else { 0.45 + 0.55 * env_bowl };
+            let s0 = (tt * 7.2 + i as f32 * 1.7).sin() * 0.5 + 0.5; // 快频，抖动更鲜明
             let s1 = (tt * 2.2 + i as f32 * 0.53).sin() * 0.5 + 0.5;
             let s2 = (tt * 1.3 - i as f32 * 0.29 + 1.7).sin() * 0.5 + 0.5;
             let s3 = (tt * 0.6 + i as f32 * 0.17 + 0.9).sin() * 0.5 + 0.5; // 慢速漂移，制造随机感
-            // 每根柱子一个稳定的随机系数，避免相邻柱子高度“整齐划一”
-            let seed = (i as u32).wrapping_mul(2_654_435_761);
-            let jit = 0.85 + 0.30 * (((seed >> 9) & 255) as f32 / 255.0);
+            // 播放时快频与逐帧微抖更鲜明；未播放时以慢速漂移为主，保持“随机平缓地动”
+            let (w0, w1, w2, w3) = if playing {
+                (0.26f32, 0.34f32, 0.22f32, 0.18f32)
+            } else {
+                (0.08f32, 0.28f32, 0.30f32, 0.34f32)
+            };
+            // 每根柱子一个稳定的随机系数（0.55~1.50），相邻柱子差异明显
+            let jit = 0.55 + 0.95 * hash01(i as u32);
+            // 逐帧随机微抖：播放时 ±20% 更鲜活；暂停时 ±8% 更平缓
+            let flick = if playing {
+                0.80 + 0.40 * hash01((i as u32) ^ framef.wrapping_mul(2_654_435_761))
+            } else {
+                0.92 + 0.16 * hash01((i as u32) ^ framef.wrapping_mul(2_654_435_761))
+            };
             let beat = ((tt * 3.5).sin() * 0.5 + 0.5).powi(4);
-            let raw = 0.24 + 0.76 * (s1 * 0.50 + s2 * 0.30 + s3 * 0.20);
-            let amp = raw * env * jit;
+            let raw = 0.16 + 0.84 * (s0 * w0 + s1 * w1 + s2 * w2 + s3 * w3);
+            // 两端可稍微更高一点（最多 +12%），中间严格受 max_h 约束在第五行歌词之下
+            let edge = 1.0 + 0.12 * d;
+            let amp = raw * env * jit * flick;
             // 软饱和（指数逼近 1）替代硬 clamp：越高越难再长，但不会所有柱子一起被削成同一高度
-            let x = amp * energy * gain + beat * 0.10 * env;
-            let v = (1.0 - (-x).exp()).clamp(0.05, 0.97);
-            let hgt = (v * max_h).max(1.5);
+            let x = amp * energy * gain + beat * 0.14 * env;
+            let v = (1.0 - (-x).exp()).clamp(0.05, 0.985);
+            let hgt = (v * max_h * edge).max(1.5);
             let bx = x0 + i as f32 * (bw + gap);
 
             let base = lerp_color(egui::Color32::from_rgb(122, 236, 255), accent, (f * 0.9).clamp(0.0, 1.0));

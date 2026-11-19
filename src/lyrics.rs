@@ -378,6 +378,14 @@ fn qq_search_mid(title: &str, artist: &str) -> Option<String> {
         if !na.is_empty() && !nn.is_empty() && (nn == na || nn.contains(&na) || na.contains(&nn)) {
             sc += 6;
         }
+        // 精度要求：歌手已知时必须“歌名+歌手”都命中（sc>=16）；歌手未知时才接受歌名完全一致（sc>=10）。
+        // 绝不再接受仅“歌名包含”的其它版本/同名歌。
+        if !na.is_empty() && sc < 16 {
+            continue;
+        }
+        if na.is_empty() && sc < 10 {
+            continue;
+        }
         if best.as_ref().map(|(bs, _)| sc > *bs).unwrap_or(true) {
             best = Some((sc, mid.to_string()));
         }
@@ -444,8 +452,25 @@ fn lrclib_fetch(title: &str, artist: &str, expected_dur: f64) -> Option<Vec<LrcL
             continue;
         }
         let nn = norm_alpha(an);
-        if !na.is_empty() && !nn.is_empty() && (nn == na || nn.contains(&na) || na.contains(&nn)) {
+        let artist_match =
+            !na.is_empty() && !nn.is_empty() && (nn == na || nn.contains(&na) || na.contains(&nn));
+        if !na.is_empty() {
+            // 歌手已知：必须“歌名+歌手”都命中，任何只沾歌名的同名歌都拒绝
+            if !artist_match {
+                continue;
+            }
             sc += 6.0;
+        } else {
+            // 歌手未知：必须歌名完全一致 + 时长强吻合，杜绝同名不同曲
+            if sc < 10.0 {
+                continue;
+            }
+            if expected_dur >= 20.0 {
+                match it.get("duration").and_then(|x| x.as_f64()) {
+                    Some(d) if (d - expected_dur).abs() <= (expected_dur * 0.03).max(3.0) => {}
+                    _ => continue,
+                }
+            }
         }
         if expected_dur >= 20.0 {
             if let Some(d) = it.get("duration").and_then(|x| x.as_f64()) {
@@ -523,14 +548,18 @@ pub fn fetch_full(
             // 旧版缓存可能存过“被试听片段时长压扁”的歌词
             let squashed = known_full >= 120.0 && last < known_full * 0.4;
             // 缓存歌词末句时间与当前实际时长差太多 → 多半是“同名不同歌”的错误匹配缓存，判为坏缓存重新取。
+            // 阈值放到 35%（时长来源本身可能偏差几十秒：如汽水时长缓存滞后），只拦“整首差一截”的明显错配。
             let wrong_song =
-                expected_dur >= 60.0 && last >= 1.0 && (last - expected_dur).abs() > (expected_dur * 0.15).max(15.0);
+                expected_dur >= 60.0 && last >= 1.0 && (last - expected_dur).abs() > (expected_dur * 0.35).max(25.0);
             squashed || wrong_song
         };
-        // 汽水歌曲：歌词只认「汽水内存读到的官方 LRC」；把它单独缓存成 {key}.soda.lrc，
+        // 汽水歌曲：歌词只认「汽水内存读到的官方 LRC」；把它单独缓存成 {key}.soda2.lrc，
         // 记住这首读成功过，下次直接命中（不必每次都让汽水重新渲染歌词页）。
+        // 网络兜底（严格匹配后）另存 {key}.sodanet2.lrc，与官方缓存分开，避免把网络歌词当官方永久信任。
+        // 版本号 soda2/sodanet2：旧版 .soda.lrc 可能残留“同名不同曲”的错误歌词，直接弃用重新取。
+        let soda_cache = d.join(format!("{}.soda2.lrc", key));
+        let soda_net_cache = d.join(format!("{}.sodanet2.lrc", key));
         // 绝不读取任何网络来源的 .lrc/.yrc 缓存（避免历史错配又被读出来）。
-        let soda_cache = d.join(format!("{}.soda.lrc", key));
         let cached_lines = if cached_pure {
             Some(instrumental_line())
         } else if soda {
@@ -538,6 +567,12 @@ pub fn fetch_full(
                 .ok()
                 .map(|s| filt(parse_lrc(&s)))
                 .filter(|v| !v.is_empty() && !stale(v))
+                .or_else(|| {
+                    std::fs::read_to_string(&soda_net_cache)
+                        .ok()
+                        .map(|s| filt(parse_lrc(&s)))
+                        .filter(|v| !v.is_empty() && !stale(v))
+                })
         } else {
             std::fs::read_to_string(&yp)
                 .ok()
@@ -636,7 +671,7 @@ fn fetch_remote(
                         .iter()
                         .map(|x| format!("[{:02}:{:05.2}]{}\n", (x.t as u32) / 60, x.t % 60.0, x.text))
                         .collect();
-                    let _ = std::fs::write(d.join(format!("{}.soda.lrc", key)), body);
+                    let _ = std::fs::write(d.join(format!("{}.soda2.lrc", key)), body);
                 }
                 return (Some(l), cover);
             }
@@ -652,7 +687,7 @@ fn fetch_remote(
                         .iter()
                         .map(|x| format!("[{:02}:{:05.2}]{}\n", (x.t as u32) / 60, x.t % 60.0, x.text))
                         .collect();
-                    let _ = std::fs::write(d.join(format!("{}.soda.lrc", key)), body);
+                    let _ = std::fs::write(d.join(format!("{}.soda2.lrc", key)), body);
                 }
             }
             let cover: Option<Vec<u8>> = None;
@@ -678,7 +713,7 @@ fn fetch_remote(
                             .iter()
                             .map(|x| format!("[{:02}:{:05.2}]{}\n", (x.t as u32) / 60, x.t % 60.0, x.text))
                             .collect();
-                        let _ = std::fs::write(d.join(format!("{}.soda.lrc", key)), body);
+                        let _ = std::fs::write(d.join(format!("{}.sodanet2.lrc", key)), body);
                     }
                     return (Some(v), nc);
                 } else {
@@ -724,14 +759,37 @@ fn fetch_remote_net(
         dlog(&format!("no song id for {} - {}", title, artist));
         return (None, None);
     }
-    // 精确度优先：先用"歌名完全一致 + 歌手一致"(>=16) 的候选；
-    // 没有再用"歌名完全一致"(>=10)；再没有才退到"仅包含"(>=4)。绝不接受只靠歌手匹配的其它歌。
+    // 精确度优先（最准方案）：只接受「歌名完全一致 + 歌手一致」(>=16) 的候选。
+    // 歌手未知时才允许“歌名完全一致”(>=10)，且必须时长强吻合（见 strict_dur_ok）。
+    // 绝不接受“仅包含/相似”或“只靠歌手”的其它歌 —— 这正是之前把英文歌配成中文歌词的根源
+    // （clean_title 会去掉括号里的版本号，像 “Hong Kong (AeroX Mix)” → “Hong Kong”，
+    //  而网易云有大量同名中文《Hong Kong》，一旦不校验歌手就会错配）。
+    let artist_known = norm_alpha(artist).chars().count() >= 2;
+    let strict_dur_ok = |cd: f64| -> bool {
+        if artist_known {
+            true
+        } else if expected_dur >= 30.0 && cd >= 5.0 {
+            (cd - expected_dur).abs() <= (expected_dur * 0.03).max(3.0)
+        } else {
+            true
+        }
+    };
     let mut pool: Vec<usize> = (0..cands.len()).filter(|&i| cands[i].0 >= 16).collect();
-    if pool.is_empty() {
+    if pool.is_empty() && !artist_known {
         pool = (0..cands.len()).filter(|&i| cands[i].0 >= 10).collect();
     }
     if pool.is_empty() {
-        pool = (0..cands.len()).filter(|&i| cands[i].0 >= 4).collect();
+        dlog(&format!(
+            "no strict lyric candidate {} - {} (artist_known={})",
+            title, artist, artist_known
+        ));
+        // 网易云没有严格候选时，仍用同样严格的标准试备用源（QQ/LRCLIB），
+        // 而不是直接放弃——避免“其实别处有正确歌词却没去取”。
+        if let Some(l) = fetch_alternates(title, artist, expected_dur) {
+            dlog(&format!("alt lyric(strict) {} - {} lines={}", title, artist, l.len()));
+            return (Some(l), None);
+        }
+        return (None, None);
     }
     // 版本优先：同一池内，时长与"当前播放器实际时长"最接近的排前面。
     // 但若 expected_dur 疑似 VIP 试听片段（<60s，且有明显更长的完整版本），
@@ -767,9 +825,8 @@ fn fetch_remote_net(
     // 第一轮：在强匹配候选里优先找“带逐字(yrc)”的版本（同名歌曲不同上传，有的有 yrc）
     for &ci in idxs.iter().take(12) {
         let (sc, id, _cd) = cands[ci];
-        // 时长闸门：只在“非精确（歌名+歌手）匹配”(sc<16) 时启用；精确匹配直接信它，
-        // 避免误杀（网易云候选的时长元数据有时不准）。Keep the Roses(sc=4) 这类才会被拦。
-        if sc < 16 && expected_dur >= 30.0 && _cd >= 5.0 && (_cd - expected_dur).abs() > (expected_dur * 0.10).max(10.0) {
+        // 时长闸门：仅在“歌手未知、靠歌名匹配”(artist_known=false) 时启用。
+        if !strict_dur_ok(_cd) {
             dlog(&format!("skip yrc dur id={} cd={:.1} exp={:.1}", id, _cd, expected_dur));
             continue;
         }
@@ -797,8 +854,8 @@ fn fetch_remote_net(
     if lines.is_none() {
         for &ci in idxs.iter().take(12) {
             let (sc, id, _cd) = cands[ci];
-            // 时长闸门：同上，只在非精确匹配(sc<16)时启用。
-            if sc < 16 && expected_dur >= 30.0 && _cd >= 5.0 && (_cd - expected_dur).abs() > (expected_dur * 0.10).max(10.0) {
+            // 时长闸门：同上，仅在歌手未知时启用。
+            if !strict_dur_ok(_cd) {
                 dlog(&format!("skip lrc dur id={} cd={:.1} exp={:.1}", id, _cd, expected_dur));
                 continue;
             }
@@ -1027,7 +1084,8 @@ mod probes {
         }
         if let Some(d) = super::cache_dir() {
             let key = super::key_hash(&title, &artist, dur);
-            let _ = std::fs::remove_file(d.join(format!("{}.soda.lrc", key)));
+            let _ = std::fs::remove_file(d.join(format!("{}.soda2.lrc", key)));
+            let _ = std::fs::remove_file(d.join(format!("{}.sodanet2.lrc", key)));
         }
         let (l, c) = super::fetch_full(&title, &artist, dur, true);
         eprintln!(
