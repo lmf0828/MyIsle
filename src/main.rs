@@ -921,6 +921,7 @@ struct IslandApp {
     music_amt: f32,
     spec_h: Vec<f32>,
     spec_lvl: f32,
+    spec_play_w: f32,
     /// 最近一次显示过的歌词行号（滞回，避免边界处来回跳）
     lyr_idx_last: i32,
     /// 收起态歌词“上滚”动画：换行瞬间的时刻，以及上一句（滚出）的索引
@@ -1170,6 +1171,7 @@ impl IslandApp {
             music_amt: 0.0,
             spec_h: Vec::new(),
             spec_lvl: 0.0,
+            spec_play_w: 0.0,
             lyr_idx_last: -1,
             lyr_anim_at: None,
             lyr_anim_from: None,
@@ -2993,12 +2995,16 @@ impl IslandApp {
         }
         let dt = painter.ctx().input(|i| i.stable_dt).clamp(0.001, 0.05);
         let idle_breath = 0.70 + 0.30 * ((t as f32 * 0.5).sin() * 0.5 + 0.5);
-        let target_lvl = if playing {
-            (0.32 + 0.85 * (0.30 * amt + 0.70 * lvl)).clamp(0.0, 1.15)
-        } else {
-            (0.58 + 0.42 * idle_breath).clamp(0.0, 1.0)
-        };
-        let lvl_tau = if playing { 0.12 } else { 0.45 };
+        // 播放/暂停切换：用约 0.38s 的平滑权重交叉过渡，避免“暂停(长)→播放(短)”瞬间跳变。
+        // 播放目标由音频电平/奏量决定、暂停用呼吸目标，两者按权重混合 → 依据电平滑顺过渡。
+        let play_w_target = if playing { 1.0 } else { 0.0 };
+        let kw = 1.0 - (-dt / 0.38).exp();
+        self.spec_play_w += (play_w_target - self.spec_play_w) * kw;
+        let pw = self.spec_play_w.clamp(0.0, 1.0);
+        let play_target = (0.32 + 0.85 * (0.30 * amt + 0.70 * lvl)).clamp(0.0, 1.15);
+        let pause_target = (0.58 + 0.42 * idle_breath).clamp(0.0, 1.0);
+        let target_lvl = pause_target + (play_target - pause_target) * pw;
+        let lvl_tau = 0.45 + (0.12 - 0.45) * pw;
         let kl = 1.0 - (-dt / lvl_tau).exp();
         self.spec_lvl += (target_lvl - self.spec_lvl) * kl;
 
@@ -3020,7 +3026,8 @@ impl IslandApp {
                 let x = ((d - 0.28) / 0.72).clamp(0.0, 1.0);
                 0.22 + 0.88 * (x * x * (3.0 - 2.0 * x))
             };
-            let env = if playing { env_bowl } else { 0.42 + 0.58 * env_bowl };
+            let env_pause = 0.42 + 0.58 * env_bowl;
+            let env = env_pause + (env_bowl - env_pause) * pw;
             let ph = hash01((i as u32).wrapping_mul(2_654_435_761)) * std::f32::consts::TAU;
             // 三道连续波：一道从左向右缓慢扫过的行波 + 两层不同频率起伏 → 随机但连续的浪面
             let wave = (tt * 1.55 - f * 6.2 + ph * 0.6).sin() * 0.5 + 0.5;
@@ -3033,11 +3040,9 @@ impl IslandApp {
             let drive = (raw * self.spec_lvl * env * jit * 1.15).clamp(0.0, 1.0);
             let target_h = (max_h * edge * drive).max(1.5);
             // 上涨快、回落慢 → 涌起后缓缓退去；播放更灵敏，暂停更悠缓
-            let tau = if target_h > self.spec_h[i] {
-                if playing { 0.06 } else { 0.16 }
-            } else {
-                if playing { 0.20 } else { 0.42 }
-            };
+            let tau_up = 0.16 + (0.06 - 0.16) * pw;
+            let tau_down = 0.42 + (0.20 - 0.42) * pw;
+            let tau = if target_h > self.spec_h[i] { tau_up } else { tau_down };
             let k = 1.0 - (-dt / tau).exp();
             self.spec_h[i] += (target_h - self.spec_h[i]) * k;
             let hgt = self.spec_h[i].clamp(1.5, max_h * edge * 1.02);
