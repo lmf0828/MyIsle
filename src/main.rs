@@ -922,6 +922,8 @@ struct IslandApp {
     spec_h: Vec<f32>,
     spec_lvl: f32,
     spec_play_w: f32,
+    spec_fast: f32,
+    spec_slow: f32,
     /// 最近一次显示过的歌词行号（滞回，避免边界处来回跳）
     lyr_idx_last: i32,
     /// 收起态歌词“上滚”动画：换行瞬间的时刻，以及上一句（滚出）的索引
@@ -1172,6 +1174,8 @@ impl IslandApp {
             spec_h: Vec::new(),
             spec_lvl: 0.0,
             spec_play_w: 0.0,
+            spec_fast: 0.0,
+            spec_slow: 0.0,
             lyr_idx_last: -1,
             lyr_anim_at: None,
             lyr_anim_from: None,
@@ -2977,8 +2981,8 @@ impl IslandApp {
         let x0 = fill_rect.left() + pad_x;
         let x1 = fill_rect.right() - pad_x;
         // 地平线略下移（0.55→0.60），给上方灯柱更多生长空间；倒影仍在下方。
-        let horizon = rect.top() + rect.height() * 0.60;
-        let max_h = (horizon - (rect.top() - over) - 2.0).max(2.0);
+        let horizon = rect.top() + rect.height() * 0.94;
+        let max_h = ((horizon - (rect.top() - over) - 2.0) * 0.95).max(2.0);
         let refl_depth = (rect.bottom() - horizon - 1.0).max(2.0);
         let n = (((x1 - x0) / 7.0).floor() as usize).clamp(20, 72);
         let gap = 2.0f32;
@@ -2995,58 +2999,55 @@ impl IslandApp {
         }
         let dt = painter.ctx().input(|i| i.stable_dt).clamp(0.001, 0.05);
         let idle_breath = 0.70 + 0.30 * ((t as f32 * 0.5).sin() * 0.5 + 0.5);
-        // 播放/暂停切换：用约 0.38s 的平滑权重交叉过渡，避免“暂停(长)→播放(短)”瞬间跳变。
-        // 播放目标由音频电平/奏量决定、暂停用呼吸目标，两者按权重混合 → 依据电平滑顺过渡。
+        // 播放/暂停切换：0.38s 平滑权重交叉，避免柱长瞬间跳变。
         let play_w_target = if playing { 1.0 } else { 0.0 };
         let kw = 1.0 - (-dt / 0.38).exp();
         self.spec_play_w += (play_w_target - self.spec_play_w) * kw;
         let pw = self.spec_play_w.clamp(0.0, 1.0);
+        // —— 整体能量包络（倒影亮度用）+ 拍点检测（柱子跟节奏用）——
         let play_target = (0.32 + 0.85 * (0.30 * amt + 0.70 * lvl)).clamp(0.0, 1.15);
         let pause_target = (0.58 + 0.42 * idle_breath).clamp(0.0, 1.0);
         let target_lvl = pause_target + (play_target - pause_target) * pw;
         let lvl_tau = 0.45 + (0.12 - 0.45) * pw;
         let kl = 1.0 - (-dt / lvl_tau).exp();
         self.spec_lvl += (target_lvl - self.spec_lvl) * kl;
+        // 电平“快起 + 慢均”差分 → 拍点脉冲 pulse：鼓点/强拍时柱子明显跃起。
+        let kf = 1.0 - (-dt / 0.045).exp();
+        self.spec_fast += (lvl - self.spec_fast) * kf;
+        let ks = 1.0 - (-dt / 0.80).exp();
+        self.spec_slow += (lvl - self.spec_slow) * ks;
+        let pulse = (((self.spec_fast - self.spec_slow) / self.spec_slow.max(0.04)) * 6.0).clamp(0.0, 1.6);
+        let lvl_norm = (self.spec_fast / 0.30).clamp(0.0, 1.0);
+        let drive_play = (0.40 + 0.60 * lvl_norm + 0.50 * pulse).clamp(0.28, 1.22);
+        let drive_pause = 0.60 + 0.18 * idle_breath;
+        let drive = drive_pause + (drive_play - drive_pause) * pw;
 
         let tt = t as f32;
-        // 稳定整数哈希 → [0,1)，给每根柱子固定的相位/个体差异
-        let hash01 = |mut x: u32| -> f32 {
-            x ^= x >> 16;
-            x = x.wrapping_mul(0x7feb_352d);
-            x ^= x >> 15;
-            x = x.wrapping_mul(0x846c_a68b);
-            x ^= x >> 16;
-            (x & 0xffff) as f32 / 65535.0
-        };
-
         for i in 0..n {
             let f = i as f32 / (n as f32 - 1.0).max(1.0);
             let d = ((f - 0.5).abs() * 2.0).clamp(0.0, 1.0);
+            // 暂停：有序缓波（边缘略高），层层铺开才有水面波纹的秩序感；
+            // 播放：整片允许长高（中间不限高，只要不超第五行歌词），由拍点脉冲带动起伏。
             let env_bowl = {
                 let x = ((d - 0.28) / 0.72).clamp(0.0, 1.0);
                 0.22 + 0.88 * (x * x * (3.0 - 2.0 * x))
             };
-            let env_pause = 0.42 + 0.58 * env_bowl;
-            let env = env_pause + (env_bowl - env_pause) * pw;
-            let ph = hash01((i as u32).wrapping_mul(2_654_435_761)) * std::f32::consts::TAU;
-            // 三道连续波：一道从左向右缓慢扫过的行波 + 两层不同频率起伏 → 随机但连续的浪面
-            let wave = (tt * 1.55 - f * 6.2 + ph * 0.6).sin() * 0.5 + 0.5;
-            let w1 = (tt * 1.05 + ph * 1.3).sin() * 0.5 + 0.5;
-            let w2 = (tt * 2.35 + ph * 2.1).sin() * 0.5 + 0.5;
-            let noise = (0.55 * wave + 0.28 * w1 + 0.17 * w2).clamp(0.0, 1.0);
-            let jit = 0.62 + 0.62 * hash01((i as u32) ^ 0x9e37_79b9);
-            let raw = 0.18 + 0.82 * noise;
-            let edge = 1.0 + 0.12 * d;
-            let drive = (raw * self.spec_lvl * env * jit * 1.15).clamp(0.0, 1.0);
-            let target_h = (max_h * edge * drive).max(1.5);
+            let env_pause = 0.55 + 0.45 * env_bowl;
+            let env = env_pause + (1.0 - env_pause) * pw;
+            // 两根平滑空间正弦叠成有序行波（随 f 连续、无逐柱随机 → 高度高低有序）
+            let wave = (f * 6.2 - tt * 1.6).sin() * 0.60
+                + (f * 2.8 - tt * 0.90 + 1.1).sin() * 0.40;
+            let amp = (0.12 + 0.88 * (wave * 0.5 + 0.5)) * env;
+            // 软饱和（指数）到顶：响/拍点越高越接近上限，但不出现一刀切的平顶。
+            let target_h = (max_h * (amp * drive).clamp(0.0, 0.97)).max(1.5);
             // 上涨快、回落慢 → 涌起后缓缓退去；播放更灵敏，暂停更悠缓
             let tau_up = 0.16 + (0.06 - 0.16) * pw;
             let tau_down = 0.42 + (0.20 - 0.42) * pw;
             let tau = if target_h > self.spec_h[i] { tau_up } else { tau_down };
             let k = 1.0 - (-dt / tau).exp();
             self.spec_h[i] += (target_h - self.spec_h[i]) * k;
-            let hgt = self.spec_h[i].clamp(1.5, max_h * edge * 1.02);
-            let v = (hgt / (max_h * edge).max(1.0)).clamp(0.0, 1.0);
+            let hgt = self.spec_h[i].clamp(1.5, max_h * 1.02);
+            let v = (hgt / max_h.max(1.0)).clamp(0.0, 1.0);
             let bx = x0 + i as f32 * (bw + gap);
 
             let base = lerp_color(egui::Color32::from_rgb(122, 236, 255), accent, (f * 0.9).clamp(0.0, 1.0));
