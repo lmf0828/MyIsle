@@ -13,6 +13,7 @@ mod cdp_lyric;
 mod soda_patch;
 mod update;
 mod paths;
+mod weather;
 
 use eframe::egui;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -31,9 +32,36 @@ const FACES: [&str; 14] = [
     "平静", "开心", "难过", "生气", "哭泣", "爱心眼", "害羞",
     "思考", "眨眼", "酷", "亲亲", "自信", "困倦", "困惑",
 ];
+/// 已删除（不再展示/可选）的表情，按 FACES 资产下标标记：哭泣=4、思考=7、困倦=12、困惑=13。
+const FACE_REMOVED: [bool; 14] = [
+    false, false, false, false, true, false, false,
+    true, false, false, false, false, true, true,
+];
+/// 当前保留可选的表情资产下标（保持原资产编号，避免与表情帧数据错位）。
+fn face_kept_indices() -> Vec<usize> {
+    (0..FACES.len()).filter(|i| !FACE_REMOVED[*i]).collect()
+}
 const UPD_BADGE_W: f32 = 40.0;
 const UPD_BADGE_H: f32 = 15.3;
 const UPD_BADGE_GAP: f32 = 8.0;
+// —— 收起态可组合组件 ——
+/// 收起态各组件“实际可视宽度”（逻辑像素），用于让组件之间真正留出 CB_GAP 的间隙。
+/// 频谱仅 3 根竖条（约 13px）、时钟是文字自身宽度，故槽宽取贴合内容，而非拍脑袋留白。
+const CW_SPECTRUM: f32 = 13.0;
+const CW_LYRICS: f32 = 200.0;
+const CW_FACE: f32 = 48.0;
+const CW_CLOCK: f32 = 38.0; // HH:MM 文字宽；显示秒时另加
+const CW_CLOCK_SECS_EXTRA: f32 = 24.0;
+const CW_WEATHER: f32 = 90.0;
+/// 仅“表情”一项时保持贴合画面的窄胶囊宽度
+const FACE_ONLY_W: f32 = 72.0;
+/// 收起态表情“两眼间距”的收拢量（逻辑像素）：左右眼各向中间靠拢其一半。
+const FACE_EYE_GAP_REDUCE: f32 = 2.0;
+/// 收起条两端内边距与组件间距
+const CB_EDGE: f32 = 14.0;
+const CB_GAP: f32 = 8.0;
+/// 收起条最大宽度 = 目前展开后的宽度（用户指定）
+const CW_MAX: f32 = W_EXPANDED;
 const H_COLLAPSED: f32 = 30.0;
 const W_EXPANDED: f32 = 520.0;
 const H_EXPANDED: f32 = 300.0;
@@ -269,6 +297,13 @@ fn apply_style(ctx: &egui::Context, light: bool) {
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.slider_width = 150.0;
     ctx.set_style(style);
+    // 提升形状抗锯齿：岛体是圆角胶囊，默认 1px feathering 在圆角/贴边处容易出现台阶状“锯齿”。
+    // 加大 feathering 宽度，并关闭“把矩形对齐到整像素”，让圆角走亚像素抗锯齿，边缘更平滑。
+    ctx.tessellation_options_mut(|o| {
+        o.feathering = true;
+        o.feathering_size_in_pixels = 1.5;
+        o.round_rects_to_pixels = false;
+    });
 }
 
 // ============================ 配置 ============================
@@ -277,6 +312,12 @@ struct Config {
     position: DockPosition,
     /// 岛体中心在屏幕上的水平位置比?0..1)。顶端吸附时用它决定左右位置?
     x_frac: f32,
+    /// 岛体中心在屏幕上的垂直位置比（0..1）。侧边（左/右）吸附时用它决定上下位置。
+    y_frac: f32,
+    /// 岛体所在显示器的物理左上角 X（虚拟屏坐标）。区分多显示器时使用。
+    mon_x: f32,
+    /// 岛体所在显示器的物理左上角 Y（虚拟屏坐标）。
+    mon_y: f32,
     font: f32,
     delay_ms: u32,
     bg: [u8; 3],
@@ -300,16 +341,25 @@ struct Config {
     lyric_font: f32,
     /// 收起态频谱动画开关
     spectrum: bool,
-    /// 收起态且无音乐时的展示：0=时间，1=待机表情
+    /// 收起态且无音乐时的展示：0=时间，1=待机表情（旧版字段，仅用于迁移）
     collapsed_mode: u8,
     /// 待机表情编号（0..FACES.len()-1）
     idle_face: u8,
+    /// 收起态组件布局：顺序即拼接顺序（左→右），每项前缀 `+` 启用 / `-` 关闭，逗号分隔。
+    /// 例："+spectrum,+lyrics,-face,+clock,-weather"。空字符串表示按旧 collapsed_mode 迁移。
+    collapsed_layout: String,
     /// 用户已在设置菜单看过更新的版本号（看过则收起态/设置角标不再出现）
     upd_seen_rail: String,
     /// 用户已点击过“软件更新”行的版本号（点过则行角标不再出现）
     upd_seen_row: String,
     /// 最近一次「已是最新版本」检查的本地日期（yyyy-mm-dd）；当天不再允许重复检查
     upd_checked_day: String,
+    /// 天气：当前城市（中国天气网城市代码；"geo:纬度,经度" 表示全球地点�?
+    weather_city: String,
+    /// 天气：当前城市显示名（搜索选择的城市；�?自动定位�?
+    weather_city_name: String,
+    /// 天气温度单位�?=摄氏�?=华氏
+    weather_unit: u8,
 }
 
 impl Default for Config {
@@ -317,6 +367,9 @@ impl Default for Config {
         Self {
             position: DockPosition::TopCenter,
             x_frac: 0.5,
+            y_frac: 0.5,
+            mon_x: 0.0,
+            mon_y: 0.0,
             font: 21.0,
             delay_ms: 200,
             bg: [28, 28, 34],
@@ -335,9 +388,13 @@ impl Default for Config {
             spectrum: true,
             collapsed_mode: 0,
             idle_face: 1,
+            collapsed_layout: String::new(),
             upd_seen_rail: String::new(),
             upd_seen_row: String::new(),
             upd_checked_day: String::new(),
+            weather_city: String::new(), // �?= 自动定位（首次拉取时探测所在城市）
+            weather_city_name: String::new(),
+            weather_unit: 0,
         }
     }
 }
@@ -373,6 +430,9 @@ impl Config {
                 match k {
                     "position" => cfg.position = DockPosition::from_str(v),
                     "x_frac" => cfg.x_frac = v.parse().unwrap_or(cfg.x_frac),
+                    "y_frac" => cfg.y_frac = v.parse().unwrap_or(cfg.y_frac),
+                    "mon_x" => cfg.mon_x = v.parse().unwrap_or(cfg.mon_x),
+                    "mon_y" => cfg.mon_y = v.parse().unwrap_or(cfg.mon_y),
                     "font" => cfg.font = v.parse().unwrap_or(cfg.font),
                     "delay_ms" => cfg.delay_ms = v.parse().unwrap_or(cfg.delay_ms),
                     "bg" => {
@@ -387,6 +447,7 @@ impl Config {
                     "show_date" => cfg.show_date = v == "1" || v == "true",
                     "collapsed_mode" => cfg.collapsed_mode = v.parse().unwrap_or(cfg.collapsed_mode),
                     "idle_face" => cfg.idle_face = v.parse().unwrap_or(cfg.idle_face),
+                    "collapsed_layout" => cfg.collapsed_layout = v.to_string(),
                     "autostart" => cfg.autostart = v == "1" || v == "true",
                     "theme" => cfg.theme = Theme::from_str(v),
                     "lyric_shift_ms" => cfg.lyric_shift_ms = v.parse().unwrap_or(cfg.lyric_shift_ms),
@@ -397,21 +458,45 @@ impl Config {
                     "upd_seen_rail" => cfg.upd_seen_rail = v.to_string(),
                     "upd_seen_row" => cfg.upd_seen_row = v.to_string(),
                     "upd_checked_day" => cfg.upd_checked_day = v.to_string(),
+                    "weather_city" => cfg.weather_city = v.to_string(),
+                    "weather_city_name" => cfg.weather_city_name = v.to_string(),
+                    "weather_unit" => cfg.weather_unit = v.parse().unwrap_or(cfg.weather_unit),
                     _ => {}
                 }
             }
         }
-        // 目前仅支?顶端吸附"，统一按顶部停靠处理（左右位置?x_frac 决定）?
-        cfg.position = DockPosition::TopCenter;
+        // 支持 顶部 / 左侧 / 右侧 三种停靠：保留左/右，其余（含旧版 TopLeft/TopRight/BottomCenter）统一按顶部处理。
+        cfg.position = match cfg.position {
+            DockPosition::LeftCenter => DockPosition::LeftCenter,
+            DockPosition::RightCenter => DockPosition::RightCenter,
+            _ => DockPosition::TopCenter,
+        };
         cfg.x_frac = cfg.x_frac.clamp(0.0, 1.0);
+        cfg.y_frac = cfg.y_frac.clamp(0.0, 1.0);
+        // 若待机表情指向已删除的表情，回退到第一个保留项。
+        if (cfg.idle_face as usize) >= FACES.len() || FACE_REMOVED[cfg.idle_face as usize] {
+            cfg.idle_face = face_kept_indices().first().copied().unwrap_or(0) as u8;
+        }
+        // 收起态组件布局缺失时，按旧 collapsed_mode 迁移
+        if cfg.collapsed_layout.trim().is_empty() {
+            cfg.collapsed_layout = if cfg.collapsed_mode == 1 {
+                "-spectrum,-lyrics,+face,-clock,-weather".to_string()
+            } else {
+                "+spectrum,+lyrics,-face,+clock,-weather".to_string()
+            };
+        }
+        // 天气固定跟随当前位置：忽略旧版本可能保存的手动城市。
+        cfg.weather_city.clear();
+        cfg.weather_city_name.clear();
         cfg
     }
 
     fn save(&self) {
         let text = format!(
-            "# WinIsle 配置\nposition={}\nx_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\ncollapsed_mode={}\nidle_face={}\nupd_seen_rail={}\nupd_seen_row={}\nupd_checked_day={}\n",
+            "# WinIsle 配置\nposition={}\nx_frac={}\ny_frac={}\nfont={}\ndelay_ms={}\nbg={},{},{}\nalpha={}\nradius={}\nshow_seconds={}\nshow_date={}\nautostart={}\ntheme={}\nlyric_shift_ms={}\nroll_anim={}\nroll_ms={}\nchar_green={}\nmarquee={}\nlyric_font={}\nspectrum={}\ncollapsed_mode={}\nidle_face={}\ncollapsed_layout={}\nupd_seen_rail={}\nupd_seen_row={}\nupd_checked_day={}\nweather_city={}\nweather_city_name={}\nweather_unit={}\nmon_x={}\nmon_y={}\n",
             self.position.as_str(),
             self.x_frac,
+            self.y_frac,
             self.font,
             self.delay_ms,
             self.bg[0],
@@ -432,9 +517,15 @@ impl Config {
             self.spectrum as u8,
             self.collapsed_mode,
             self.idle_face,
+            self.collapsed_layout,
             self.upd_seen_rail,
             self.upd_seen_row,
             self.upd_checked_day,
+            self.weather_city,
+            self.weather_city_name,
+            self.weather_unit,
+            self.mon_x,
+            self.mon_y,
         );
         let _ = std::fs::write(config_path(), text);
     }
@@ -446,7 +537,7 @@ fn set_autostart(on: bool) {
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-    // 清理旧品牌遗留的自启项，避免指向已不存在的旧 exe。
+    // 清理旧品牌遗留的自启项，避免指向已不存在的旧 exe�?
     let _ = std::process::Command::new("reg")
         .args(["delete", key, "/v", "MyIsle", "/f"])
         .status();
@@ -664,7 +755,7 @@ fn position_grid(ui: &mut egui::Ui, sel: &mut DockPosition, c: &Colors) {
 }
 
 // ============================ App ============================
-/// 左侧导航对应的独立模块（互不覆盖；音乐在后台持续运行，切到别的模块不影响它）。
+/// 左侧导航对应的独立模块（互不覆盖；音乐在后台持续运行，切到别的模块不影响它）�?
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Module {
     Music,
@@ -672,7 +763,7 @@ enum Module {
     Weather,
 }
 
-/// 仅用于调试钩子 WINISLE_PAGE：启动后直接定位到某个视图。
+/// 仅用于调试钩�?WINISLE_PAGE：启动后直接定位到某个视图�?
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DbgView {
     Settings,
@@ -687,6 +778,8 @@ struct IslandApp {
     target: f32,
     collapse_at: Option<Instant>,
     monitor: egui::Vec2,
+    /// 岛体所在显示器的逻辑矩形（虚拟屏坐标，已除以 pixels_per_point）。
+    monitor_rect: egui::Rect,
     last_geom: (f32, f32, f32, f32),
     last_tick: std::time::Instant,
     cfg: Config,
@@ -725,7 +818,7 @@ struct IslandApp {
     lyr_tx: std::sync::mpsc::Sender<(String, String, String, f64, bool)>,
     lyr_rx: std::sync::mpsc::Receiver<(String, Option<Vec<lyrics::LrcLine>>, Option<Vec<u8>>)>,
     lyr_key: String,
-    lyr_dur: f64, // 当初请求歌词时采用的“期望时长”，用于发现同名不同版本(时长不符)后重取
+    lyr_dur: f64, // 当初请求歌词时采用的“期望时长”，用于发现同名不同版本(时长不符)后重�?
     lyr_lines: Vec<lyrics::LrcLine>,
     /// 当前曲目的歌词请求是否已完成（用于区分“正在加载”与“确实没有歌词/纯音乐”）
     lyr_done: bool,
@@ -776,6 +869,8 @@ struct IslandApp {
     upd_badge_tex: Option<egui::TextureHandle>,
     /// 收起态待机表情动画帧贴图（1:1 复刻 Otto 原版逐帧动画，按 FACES 顺序懒加载）
     face_frames: Vec<Option<Vec<egui::TextureHandle>>>,
+    /// 每个待机表情“实际不透明内容”的 UV 包围盒（用于收起条裁掉透明留白，使模块间距=实际内容间距）
+    face_content_uv: Vec<Option<(f32, f32, f32, f32)>>,
     /// 兜底：SMTC 不可用时，从播放器窗口标题抓 “歌名 - 歌手”
     media_title_at: Instant,
     media_title_cache: Option<(String, String, String)>,
@@ -798,6 +893,12 @@ struct IslandApp {
     lyr_drag_off: f32,
     /// 滚轮目标偏移（`lyr_drag_off` 平滑趋近它，形成滚动过渡）
     lyr_scroll_target: f32,
+    /// 频谱动画相位累加（支持按歌曲快慢自适应变速，切换无跳变）
+    spec_phase: f64,
+    /// 频谱当前平滑速度（弧度/秒）
+    spec_speed: f32,
+    /// 频谱上一帧时间戳（用于按帧推进相位）
+    spec_last_t: f64,
     /// 当前句索引的平滑值（换行时整列表平滑上移，而不是直接跳一行）
     lyr_ci_anim: f32,
     lyr_release_at: Option<Instant>,
@@ -824,6 +925,10 @@ struct IslandApp {
     settings_scroll: f32,
     /// 设置页滚动目标值（滚轮累加），实际 settings_scroll 每帧向它平滑逼近，实现丝滑滚动
     settings_scroll_target: f32,
+    /// 设置页滚动条可见度（0..1）：滚动时淡入，停止�?1 秒后自动淡出
+    settings_scroll_vis: f32,
+    /// 设置页最近一次滚动活动时间（用于滚动条自动隐藏判定）
+    settings_scroll_act: std::time::Instant,
     /// 调试：WINISLE_PAGE=settings/schedule/weather 时启动即定位对应视图（用于截图验证）
     dbg_page: Option<DbgView>,
     /// 左侧菜单选中项滑动动画：开始时刻 / 上一选中索引 / 上个模块
@@ -841,6 +946,51 @@ struct IslandApp {
     upd_inst_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     /// 下载进度百分比（后台线程写、UI 只读）
     upd_dl_pct: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    // ===== 天气模块 =====
+    /// 天气快照（线上成功或缓存兜底�?
+    w_data: Option<weather::Weather>,
+    /// 天气后台拉取线程的接收端
+    w_rx: Option<std::sync::mpsc::Receiver<Result<weather::Weather, String>>>,
+    /// 是否正在拉取（避免重复起线程�?
+    w_inflight: bool,
+    /// 最近一次尝试拉取的时刻（节流自动刷新）
+    w_last_fetch: Instant,
+    /// 最近一次拉取失败的错误文案（UI 可提示）
+    w_err: Option<String>,
+    /// 刷新结果提示（“已更新 / 更新失败”），连同颜色与过期时刻
+    w_notice: String,
+    w_notice_err: bool,
+    w_notice_until: Option<Instant>,
+    /// 本机最近一次成功拉取的时刻文案（HH:MM）；缓存启动时为“缓存�?
+    w_fetch_label: String,
+    /// 天气页滚动偏移（当前�?/ 目标值，平滑逼近�?
+    w_scroll: f32,
+    w_scroll_target: f32,
+    /// 天气页滚动条可见度（0..1）：滚动时淡入，停止约 1.2 秒后自动淡出
+    w_scroll_vis: f32,
+    /// 天气页最近一次滚动活动时间（用于滚动条自动隐藏判定）
+    w_scroll_act: std::time::Instant,
+    /// 城市搜索页开�?
+    w_city_search: bool,
+    /// 搜索页是从天气页打开的（返回时回天气页，而不是设置页�?
+    w_city_search_from_weather: bool,
+    /// 搜索页打开后是否还需要把键盘焦点交给输入�?
+    w_search_need_focus: bool,
+    /// 聚焦输入框的重试次数（窗口刚允许激活时，首帧请求可能还没生效）
+    w_search_focus_tries: u8,
+    /// 上一帧搜索页开合状态（用于临时切换窗口可激活属性）
+    w_activatable_last: bool,
+    /// 城市搜索页入�?退场动画进度（0..1�?
+    w_city_search_anim: f32,
+    /// 城市搜索输入与结�?
+    w_search_query: String,
+    w_search_results: Vec<weather::CityHit>,
+    /// 结果列表出现时刻（用于逐条淡入过渡�?
+    w_search_results_at: Option<Instant>,
+    w_search_rx: Option<std::sync::mpsc::Receiver<Vec<weather::CityHit>>>,
+    w_search_inflight: bool,
+    w_search_last_edit: Instant,
+    w_search_last_query: String,
 }
 
 impl IslandApp {
@@ -852,7 +1002,7 @@ impl IslandApp {
         std::thread::spawn(move || {
             while let Ok((key, title, artist, dur, soda)) = lyr_req_rx.recv() {
                 let (r, cov) = lyrics::fetch_full(&title, &artist, dur, soda);
-                // 诊断日志：记录每次歌词/封面请求结果
+                // 迷你?
                 {
                     use std::io::Write;
                     let p = crate::paths::file("lyrics_debug.log");
@@ -867,20 +1017,26 @@ impl IslandApp {
                 }
             }
         });
-        // SMTC 采用主线程非阻塞状态机（见 smtc.rs），无需后台线程。
+        // 注：此前为“移到屏幕外取歌词”遗留窗口加过的自动看门狗已移除（它会误伤正常窗口）�?
+        // 仅在启动时用保守�?ensure_soda_reachable 还原 WinIsle 自己留下的精确句柄�?
+        // SMTC 采用主线程非阻塞状态机（见 smtc.rs），无需后台线程�?
         let dbg_page = match std::env::var("WINISLE_PAGE").ok().as_deref() {
             Some("settings") => Some(DbgView::Settings),
             Some("schedule") => Some(DbgView::Schedule),
             Some("weather") => Some(DbgView::Weather),
             _ => None,
         };
-        Self {
+        // 启动时先读缓存，保证断网/首次拉取前也有数据可显示
+        let w_data = weather::load_cache(&cfg.weather_city);
+        let w_fetch_label = if w_data.is_some() { "缓存".to_string() } else { String::new() };
+        let mut app = Self {
             hwnd: 0,
             initialized: false,
             expanded: 0.0,
             target: 0.0,
             collapse_at: None,
             monitor: egui::vec2(1920.0, 1080.0),
+            monitor_rect: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1920.0, 1080.0)),
             last_geom: (0.0, 0.0, -9999.0, -9999.0),
             last_tick: std::time::Instant::now(),
             cfg,
@@ -941,6 +1097,7 @@ impl IslandApp {
             fallback_cover_tex: None,
         upd_badge_tex: None,
             face_frames: (0..FACES.len()).map(|_| None).collect(),
+            face_content_uv: (0..FACES.len()).map(|_| None).collect(),
             media_title_at: Instant::now() - Duration::from_secs(10),
             media_title_cache: None,
             player_running_cached: false,
@@ -954,6 +1111,9 @@ impl IslandApp {
             lyr_anim_from: None,
             lyr_drag_off: 0.0,
             lyr_scroll_target: 0.0,
+            spec_phase: 0.0,
+            spec_speed: 5.2,
+            spec_last_t: 0.0,
             lyr_ci_anim: -1.0,
             lyr_release_at: None,
             lyr_return_from: 0.0,
@@ -970,6 +1130,8 @@ impl IslandApp {
             show_settings: false,
             settings_scroll: 0.0,
             settings_scroll_target: 0.0,
+            settings_scroll_vis: 0.0,
+            settings_scroll_act: std::time::Instant::now() - std::time::Duration::from_secs(10),
             dbg_page,
             rail_anim_at: None,
             rail_from: 0.0,
@@ -982,9 +1144,53 @@ impl IslandApp {
             upd_rx: None,
             upd_inst_rx: None,
             upd_dl_pct: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
-    
-    
+            w_data,
+            w_rx: None,
+            w_inflight: false,
+            w_last_fetch: Instant::now() - Duration::from_secs(3600),
+            w_err: None,
+            w_notice: String::new(),
+            w_notice_err: false,
+            w_notice_until: None,
+            w_fetch_label,
+            w_scroll: 0.0,
+            w_scroll_target: 0.0,
+            w_scroll_vis: 0.0,
+            w_scroll_act: std::time::Instant::now() - std::time::Duration::from_secs(10),
+            w_city_search: false,
+            w_city_search_from_weather: false,
+            w_search_need_focus: false,
+            w_search_focus_tries: 0,
+            w_activatable_last: false,
+            w_city_search_anim: 0.0,
+            w_search_query: String::new(),
+            w_search_results: Vec::new(),
+            w_search_results_at: None,
+            w_search_rx: None,
+            w_search_inflight: false,
+            w_search_last_edit: Instant::now(),
+            w_search_last_query: String::new(),
+        };
+        // 不依赖上一帧可能滞后的窗口原点，保证能精确贴到最?最右角?
+        if let Ok(v) = std::env::var("WINISLE_CITY_SEARCH") {
+            app.show_settings = true;
+            app.w_city_search = true;
+            app.w_search_need_focus = true;
+            app.w_search_focus_tries = 5;
+            app.w_city_search_anim = 1.0;
+            if v == "weather" {
+                app.active = Module::Weather;
+                app.last_active = Module::Weather;
+                app.rail_from = 1.0;
+                app.w_city_search_from_weather = true;
+            }
         }
+        // 仅调试：预填搜索词（配合 WINISLE_CITY_SEARCH 使用），不产生任何真实键盘事件。
+        if let Ok(q) = std::env::var("WINISLE_SEARCH_QUERY") {
+            app.w_search_query = q;
+            app.w_search_last_edit = Instant::now() - Duration::from_millis(500);
+        }
+        app
     }
 
     fn ensure_window(&mut self, frame: &mut eframe::Frame) {
@@ -996,7 +1202,11 @@ impl IslandApp {
                 self.hwnd = w.hwnd.get();
                 platform::make_island(self.hwnd);
                 platform::install_erase_guard(self.hwnd);
-                if std::env::var_os("WINISLE_LAYERED").is_some() {
+                platform::start_click_through_poller(self.hwnd);
+                // 关键：让窗口成为“分层窗口(WS_EX_LAYERED)”。只有分层窗口上的 WS_EX_TRANSPARENT 才能真正把鼠标/点击
+                // 穿透到下层其它进程的窗口；普通窗口仅设 WS_EX_TRANSPARENT 时对本进程以外无效（这正是“点了没反应”的原因）。
+                // SetLayeredWindowAttributes(alpha=255) 保持整窗不透明，逐像素透明仍由 GL/DWM 的 alpha 负责。
+                if std::env::var_os("WINISLE_NO_LAYERED").is_none() {
                     platform::set_layered(self.hwnd);
                 }
                 // 首次创建后先把客户区预填充成深色（背景刷已置空，避免首帧任何未定义底色）
@@ -1015,13 +1225,25 @@ impl IslandApp {
         }
         let now = Instant::now();
         if std::env::var_os("WINISLE_FORCE_EXPAND").is_some() {
-            // 仅调试：无鼠标环境下强制展开（用于截图/自动化）
+            // 仅调试：无鼠标环境下强制展开（用于截�?自动化）
             self.target = 1.0;
             self.collapse_at = None;
             let dt = ctx.input(|i| i.stable_dt).min(0.05);
             let k = 1.0 - (-15.0 * dt).exp();
             self.expanded += (1.0 - self.expanded) * k;
             if (1.0 - self.expanded).abs() > 0.002 {
+                ctx.request_repaint();
+            }
+            return;
+        }
+        if std::env::var_os("WINISLE_CYCLE").is_some() {
+            // 仅调试：按时间自动“展开→收起”循环，用于无鼠标环境下复现展开/收起后的穿透状态。
+            let t = ctx.input(|i| i.time);
+            self.target = if (t % 4.0) < 2.0 { 1.0 } else { 0.0 };
+            let dt = ctx.input(|i| i.stable_dt).min(0.05);
+            let k = 1.0 - (-15.0 * dt).exp();
+            self.expanded += (self.target - self.expanded) * k;
+            if (self.target - self.expanded).abs() > 0.002 {
                 ctx.request_repaint();
             }
             return;
@@ -1070,22 +1292,150 @@ impl IslandApp {
         egui::vec2(W_EXPANDED, H_EXPANDED)
     }
 
-    /// 收起态宽度：有音乐时加宽到 W_COLLAPSED_MUSIC（放歌词/歌名），否则窄胶囊。
-    /// 收起态前面可动态插入的额外元素总宽度（目前是「升级」胶囊，以后可继续加）。
-    fn collapsed_extra_w(&self) -> f32 {
-        if self.face_mode_active() {
-            return 0.0;
+    /// 解析收起态组件顺序：返回 (id, enabled) 列表（包含全部已知组件，缺失的按默认顺序补齐）。
+    fn comp_order(&self) -> Vec<(String, bool)> {
+        const KNOWN: [&str; 5] = ["spectrum", "lyrics", "face", "clock", "weather"];
+        let mut out: Vec<(String, bool)> = Vec::new();
+        for tok in self.cfg.collapsed_layout.split(',') {
+            let t = tok.trim();
+            if t.is_empty() {
+                continue;
+            }
+            let (en, id) = if let Some(r) = t.strip_prefix('+') {
+                (true, r.trim())
+            } else if let Some(r) = t.strip_prefix('-') {
+                (false, r.trim())
+            } else {
+                (true, t)
+            };
+            if KNOWN.contains(&id) && !out.iter().any(|(x, _)| x == id) {
+                out.push((id.to_string(), en));
+            }
         }
-        if self.show_time_update() {
-            UPD_BADGE_W + 10.0
-        } else {
-            0.0
+        for k in KNOWN {
+            if !out.iter().any(|(x, _)| x == k) {
+                out.push((k.to_string(), false));
+            }
+        }
+        out
+    }
+
+    fn set_comp_order(&mut self, order: &[(String, bool)]) {
+        let s = order
+            .iter()
+            .map(|(id, on)| format!("{}{}", if *on { "+" } else { "-" }, id))
+            .collect::<Vec<_>>()
+            .join(",");
+        self.cfg.collapsed_layout = s;
+    }
+
+    fn comp_label(id: &str) -> &'static str {
+        match id {
+            "spectrum" => "频谱",
+            "lyrics" => "歌词",
+            "face" => "表情",
+            "clock" => "时间",
+            "weather" => "天气",
+            _ => "?",
         }
     }
 
-    /// 收起态且无音乐、且用户选择了「表情」模式
+    /// 组件在其启用且（音乐组件需有音乐）时的基准宽度（逻辑像素）。
+    fn comp_base_w(&self, id: &str) -> f32 {
+        match id {
+            "spectrum" => CW_SPECTRUM,
+            "lyrics" => CW_LYRICS,
+            "face" => CW_FACE,
+            "clock" => {
+                let mut w = CW_CLOCK;
+                if self.cfg.show_seconds {
+                    w += CW_CLOCK_SECS_EXTRA;
+                }
+                if self.show_time_update() {
+                    w += UPD_BADGE_W + UPD_BADGE_GAP;
+                }
+                w
+            }
+            "weather" => CW_WEATHER,
+            _ => 0.0,
+        }
+    }
+
+    /// 该组件当前实际占用宽度（音乐组件按 music_amt 缩放；不需要显示的返回 0）。
+    fn comp_eff_w(&self, id: &str) -> f32 {
+        let base = self.comp_base_w(id);
+        match id {
+            "spectrum" => base * self.music_amt.clamp(0.0, 1.0),
+            "lyrics" => base * self.music_amt.clamp(0.0, 1.0),
+            "weather" => {
+                if self.w_data.is_none() {
+                    0.0
+                } else {
+                    base
+                }
+            }
+            _ => base,
+        }
+    }
+
+    /// 收起态当前应显示的组件（按顺序、已启用、宽度>0），返回 (id, 宽度)。
+    fn active_comps(&self) -> Vec<(String, f32)> {
+        let mut out = Vec::new();
+        for (id, on) in self.comp_order() {
+            if !on {
+                continue;
+            }
+            let w = self.comp_eff_w(&id);
+            if w > 0.5 {
+                out.push((id, w));
+            }
+        }
+        out
+    }
+
+    /// 收起态总宽度（含两端内边距与组件间距），夹到 [72, CW_MAX]。
+    fn collapsed_w(&self) -> f32 {
+        let comps = self.active_comps();
+        if comps.is_empty() {
+            return W_COLLAPSED_FACE;
+        }
+        // 仅「表情」一项时保持贴合表情画面的窄胶囊（与旧版一致）
+        if comps.len() == 1 && comps[0].0 == "face" {
+            return FACE_ONLY_W;
+        }
+        let mut w = CB_EDGE * 2.0;
+        for (i, (_, cw)) in comps.iter().enumerate() {
+            if i > 0 {
+                w += CB_GAP;
+            }
+            w += *cw;
+        }
+        w.clamp(W_COLLAPSED_FACE, CW_MAX)
+    }
+
+    /// 给定布局按“基准宽度”（不受音乐淡入缩放）计算的总宽，用于 520 上限判定与占宽提示。
+    fn order_base_width(&self, order: &[(String, bool)]) -> f32 {
+        let widths: Vec<f32> = order
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(id, _)| self.comp_base_w(id))
+            .collect();
+        if widths.is_empty() {
+            return 0.0;
+        }
+        let mut w = CB_EDGE * 2.0;
+        for (i, cw) in widths.iter().enumerate() {
+            if i > 0 {
+                w += CB_GAP;
+            }
+            w += *cw;
+        }
+        w
+    }
+
+    /// 收起态是否启用「表情」组件（用于设置页展开表情网格、加载帧）。
     fn face_mode_active(&self) -> bool {
-        self.cfg.collapsed_mode == 1 && self.music_amt < 0.01
+        self.comp_order().iter().any(|(id, on)| *on && id == "face")
     }
 
     /// 解析内嵌的表情动画二进制（MFAN）：返回每个表情 (w, h, 帧数, 像素起始偏移)。
@@ -1110,6 +1460,74 @@ impl IslandApp {
             out.push((w, h, fc, off));
         }
         out
+    }
+
+    /// 计算某表情「所有帧的不透明内容」并集 UV 包围盒 (u0,v0,u1,v1)，用于裁掉透明留白。
+    /// 纯函数（不依赖 self），供布局与绘制共用。
+    fn face_content_uv_compute(idx: usize) -> (f32, f32, f32, f32) {
+        let metas = Self::face_anim_meta();
+        let full = (0.0, 0.0, 1.0, 1.0);
+        let (w, h, fc, off) = match metas.get(idx) {
+            Some(m) => *m,
+            None => return full,
+        };
+        const ANIM: &[u8] = include_bytes!("assets/faces_anim.bin");
+        let (wu, hu, fcu) = (w as usize, h as usize, fc as usize);
+        let stride = wu * hu;
+        let (mut minx, mut miny, mut maxx, mut maxy) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        for f in 0..fcu {
+            let base = off + f * stride;
+            if base + stride > ANIM.len() {
+                break;
+            }
+            for y in 0..hu {
+                let row = base + y * wu;
+                for x in 0..wu {
+                    if ANIM[row + x] > 16 {
+                        if x < minx { minx = x; }
+                        if x > maxx { maxx = x; }
+                        if y < miny { miny = y; }
+                        if y > maxy { maxy = y; }
+                    }
+                }
+            }
+        }
+        if minx == usize::MAX {
+            full
+        } else {
+            (
+                minx as f32 / wu as f32,
+                miny as f32 / hu as f32,
+                (maxx + 1) as f32 / wu as f32,
+                (maxy + 1) as f32 / hu as f32,
+            )
+        }
+    }
+
+    /// 某表情内容包围盒对应的“可视宽高比”。
+    fn face_content_aspect(idx: usize) -> f32 {
+        let metas = Self::face_anim_meta();
+        let (w, h) = metas
+            .get(idx)
+            .map(|m| (m.0 as f32, m.1 as f32))
+            .unwrap_or((77.0, 80.0));
+        let (u0, v0, u1, v1) = Self::face_content_uv_compute(idx);
+        ((w * (u1 - u0)) / (h * (v1 - v0)).max(1.0)).max(0.2)
+    }
+
+    fn face_content_uv(&mut self, idx: usize) -> (f32, f32, f32, f32) {
+        let metas = Self::face_anim_meta();
+        if self.face_content_uv.len() != metas.len() {
+            self.face_content_uv = (0..metas.len()).map(|_| None).collect();
+        }
+        if let Some(uv) = self.face_content_uv.get(idx).and_then(|o| *o) {
+            return uv;
+        }
+        let uv = Self::face_content_uv_compute(idx);
+        if let Some(slot) = self.face_content_uv.get_mut(idx) {
+            *slot = Some(uv);
+        }
+        uv
     }
 
     /// 懒加载指定表情的整段动画帧贴图（Otto 原版逐帧，绿字 + 透明底）。
@@ -1152,15 +1570,6 @@ impl IslandApp {
         }
     }
 
-    fn collapsed_w(&self) -> f32 {
-        let base = if self.cfg.collapsed_mode == 1 {
-            W_COLLAPSED_FACE
-        } else {
-            W_COLLAPSED
-        };
-        base + (W_COLLAPSED_MUSIC - base) * self.music_amt.clamp(0.0, 1.0)
-            + self.collapsed_extra_w()
-    }
 
     /// 有效播放状态：SMTC 可用时以真实状态为准；否则用本地乐观状态（媒体键控制无法回读）。
     /// 播放器进程是否在运行（结果缓存 1 秒；进程枚举在无音乐时很贵，不能每帧做）。
@@ -1252,7 +1661,7 @@ impl IslandApp {
     }
 
     fn duration_est(&self) -> f64 {
-        // 汽水：只用汽水自己播放条读到的真实总时长；读不到就用 SMTC 上报值。不借用任何网易云缓存。
+        // 汽水：只用汽水自己播放条读到的真实总时长；读不到就�?SMTC 上报值。不借用任何网易云缓存�?
         if self.app_is_soda() {
             return if self.soda_dur >= 1.0 { self.soda_dur } else { self.music.duration };
         }
@@ -1280,7 +1689,10 @@ impl IslandApp {
         }
         let mut d = if self.music.duration > 1.0 { self.music.duration } else { 0.0 };
         if let Some(l) = self.lyr_lines.last() {
-            d = d.max(l.t + 6.0);
+            // 纯音乐占位只有一�?t=0，不能拿来推算总时长（否则会误把时长算�?6s）�?
+            if !lyrics::is_instrumental(&self.lyr_lines) {
+                d = d.max(l.t + 6.0);
+            }
         }
         d
     }
@@ -1360,15 +1772,84 @@ impl IslandApp {
     }
 
     /// 按给定的展开?e 计算岛体矩形（相对固定窗口左上角）。e=1 时尺寸为 expanded_size()?
+    /// 侧边吸附时展开面板的竖向生长方向：朝“竖向空间更大的一侧”生长。
+    /// true=向上生长（岛体锚在底部，面板往上撑满）；false=向下生长（锚在顶部，往下撑满）。
+    fn side_grow_up(&self) -> bool {
+        let mt = self.monitor_rect.min.y;
+        let mh = self.monitor.y.max(1.0);
+        let bh2 = (H_COLLAPSED + TOP_OVERLAP) * 0.5;
+        let cy = (mt + self.cfg.y_frac * mh).clamp(mt + bh2, (mt + mh - bh2).max(mt + bh2));
+        let room_up = (cy - bh2) - mt;
+        let room_down = (mt + mh) - (cy + bh2);
+        // 展开时岛体需要额外向下/向上再长出的高度（= 展开面板高度 - 收起条高）。
+        let need = H_EXPANDED - H_COLLAPSED;
+        // 优先“向下展开”：只要下方空间够展开，就向下撑；不够再向上；两边都不够则朝空间大的一侧。
+        if room_down >= need {
+            false
+        } else if room_up >= need {
+            true
+        } else {
+            room_up > room_down
+        }
+    }
+
+    /// 顶部吸附时展开面板的水平生长方向：中间够宽就左右对称撑；靠边则锚住该侧朝内撑。
+    /// -1=锚左(向右撑)，0=居中对称，1=锚右(向左撑)。
+    fn top_h_anchor(&self) -> i32 {
+        let mx = self.monitor_rect.min.x;
+        let mw = self.monitor.x.max(1.0);
+        let cw = self.collapsed_w();
+        let bh = cw * 0.5;
+        let bx = (mx + self.cfg.x_frac * mw).clamp(mx + bh, (mx + mw - bh).max(mx + bh));
+        let half_extra = (W_EXPANDED - cw) * 0.5;
+        let room_l = (bx - bh) - mx;
+        let room_r = (mx + mw) - (bx + bh);
+        if room_l >= half_extra && room_r >= half_extra {
+            0
+        } else if room_r >= room_l {
+            -1
+        } else {
+            1
+        }
+    }
+
     fn pill_rect_e(&self, full: egui::Rect, e: f32) -> egui::Rect {
         let target = self.expanded_size();
         let cw = self.collapsed_w();
         let w = cw + (target.x - cw) * e;
         let h = H_COLLAPSED + (target.y - H_COLLAPSED) * e;
-        // 顶端吸附：窗口始终以岛体中心为水平中心、贴住顶部（上方留 MARGIN 透明外框）。左右位置由 x_frac 在 layout_screen 里换算。
-        let x = full.left() + (full.width() - w) * 0.5;
-        let y = full.top() + MARGIN - TOP_OVERLAP;
-        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h + TOP_OVERLAP))
+        let fh = h + TOP_OVERLAP;
+        // 岛体在“固定窗口”内的本地位置，按停靠边锚定；窗口 origin 与展开度 e 无关（恒定），
+        // 展开/收缩时窗口不移动，只有岛体在窗口内朝“空的一侧”生长，收起后回到原位置。
+        //  顶部吸附——水平居中、贴顶（向下生长，水平对称）。
+        //  左右吸附——水平锚到贴边侧；竖向朝空间更大的一侧生长（靠上则往下撑，靠下则往上撑）。
+        let (x, y) = match self.cfg.position {
+            DockPosition::LeftCenter => {
+                let y = if self.side_grow_up() {
+                    full.top() + (full.height() - (MARGIN - TOP_OVERLAP)) - fh
+                } else {
+                    full.top() + MARGIN - TOP_OVERLAP
+                };
+                (full.left(), y)
+            }
+            DockPosition::RightCenter => {
+                let y = if self.side_grow_up() {
+                    full.top() + (full.height() - (MARGIN - TOP_OVERLAP)) - fh
+                } else {
+                    full.top() + MARGIN - TOP_OVERLAP
+                };
+                (full.right() - w, y)
+            }
+            _ => {
+                let x = match self.top_h_anchor() {
+                    -1 => full.left() + MARGIN,
+                    1 => full.right() - MARGIN - w,
+                    _ => full.left() + (full.width() - w) * 0.5,
+                };
+                (x, full.top() + MARGIN - TOP_OVERLAP)
+            }
+        };
+        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, fh))
     }
 
     fn pill_rect(&self, full: egui::Rect) -> egui::Rect {
@@ -1394,23 +1875,80 @@ impl IslandApp {
         );
     }
 
+    /// 刷新“当前显示器”：以配置里记录的物理左上角为准，找到该显示器当前的物理矩形，
+    /// 再换算成逻辑矩形（除以 pixels_per_point）。显示器被拔掉/改分辨率时会自动退化。
+    /// 拖动过程中不会被调用改变目标（cfg.mon_* 只在松手落定时更新），因此不会干扰拖拽。
+    fn refresh_monitor(&mut self, ctx: &egui::Context) {
+        let ppp = ctx.pixels_per_point().max(0.5);
+        let (mx, my) = (self.cfg.mon_x, self.cfg.mon_y);
+        // 用记录点 (+2,+2) 探测该显示器（避免正好落在多屏接缝上）。
+        if let Some((l, t, r, b)) = platform::monitor_rect_at(mx as i32 + 2, my as i32 + 2) {
+            let mw = (r - l) as f32 / ppp;
+            let mh = (b - t) as f32 / ppp;
+            if mw > 1.0 && mh > 1.0 {
+                self.monitor_rect =
+                    egui::Rect::from_min_size(egui::pos2(l as f32 / ppp, t as f32 / ppp), egui::vec2(mw, mh));
+                self.monitor = egui::vec2(mw, mh);
+                return;
+            }
+        }
+        // 兜底：egui 上报的当前显示器尺寸（原点按 0,0）。
+        if let Some(ms) = ctx.input(|i| i.viewport().monitor_size) {
+            if ms.x > 1.0 && ms.y > 1.0 {
+                self.monitor = ms;
+                self.monitor_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), ms);
+            }
+        }
+    }
+
     /// 窗口固定为大窗口(W_EXPANDED×H_EXPANDED)；收起时?SetWindowRgn 把窗口裁剪到岛体?
     /// 因此这里始终按大窗口计算 origin 与岛体屏幕矩形（岛体相对窗口的本地位置由停靠位决定）?
     fn layout_screen(&self) -> (egui::Rect, egui::Rect) {
         let w = W_EXPANDED + 2.0 * MARGIN;
         let h = H_EXPANDED + 2.0 * MARGIN;
-        // 顶端吸附 + 水平自由定位：岛体中心 = x_frac * 屏宽（左右夹紧，保证完全可见）；
-        // 展开变大时若靠近两端，会自动向屏幕内侧生长（左端向右长、右端向左长）。
         let cw = self.collapsed_w();
-        let pw = cw + (W_EXPANDED - cw) * self.expanded;
-        let ph = H_COLLAPSED + (H_EXPANDED - H_COLLAPSED) * self.expanded;
-        let center = (self.cfg.x_frac * self.monitor.x)
-            .clamp(cw * 0.5, self.monitor.x - cw * 0.5);
-        let left = (center - pw * 0.5).clamp(0.0, (self.monitor.x - pw).max(0.0));
-        let pill = egui::Rect::from_min_size(egui::pos2(left, -TOP_OVERLAP), egui::vec2(pw, ph + TOP_OVERLAP));
-        // 窗口四周各留出 MARGIN 透明外框：origin 上移 MARGIN 使岛体顶贴屏顶，左右居中。
-        let origin = egui::pos2(pill.center().x - w * 0.5, -MARGIN);
-        let full = egui::Rect::from_min_size(origin, egui::vec2(w, h));
+        // 当前显示器在虚拟屏中的逻辑左上角（多显示器时不是 0,0）。
+        let mx = self.monitor_rect.min.x;
+        let my = self.monitor_rect.min.y;
+        let mw = self.monitor.x.max(1.0);
+        let mh = self.monitor.y.max(1.0);
+        let full_size = egui::vec2(w, h);
+        // 收起态岛体（条）高度、及其一半，用于确定沿边中心/锚点。
+        let bar_h = H_COLLAPSED + TOP_OVERLAP;
+        let bh2 = bar_h * 0.5;
+        let origin = match self.cfg.position {
+            DockPosition::LeftCenter | DockPosition::RightCenter => {
+                // 沿边中心（用收起的条半高夹紧，保证条本身完整在屏内）。
+                let cy = (my + self.cfg.y_frac * mh).clamp(my + bh2, (my + mh - bh2).max(my + bh2));
+                // 让“收起态的条”竖向上正好落在 cy 处；生长方向决定条在窗口的顶部还是底部。
+                // local0 与展开度 e 无关 → 窗口 origin 恒定、静止不移动（避免展开/收缩时窗口移动导致抖动/缝隙）。
+                let local0 = if self.side_grow_up() {
+                    h - (MARGIN - TOP_OVERLAP) - bar_h
+                } else {
+                    MARGIN - TOP_OVERLAP
+                };
+                let oy = (cy - bh2) - local0;
+                let ox = if matches!(self.cfg.position, DockPosition::LeftCenter) {
+                    mx
+                } else {
+                    mx + mw - w
+                };
+                egui::pos2(ox, oy)
+            }
+            _ => {
+                // 顶部吸附：水平按锚点生长（中间对称、靠边锚住朝内撑），窗口 origin 与 e 无关。
+                let bh = cw * 0.5;
+                let bx = (mx + self.cfg.x_frac * mw).clamp(mx + bh, (mx + mw - bh).max(mx + bh));
+                let ox = match self.top_h_anchor() {
+                    -1 => (bx - bh) - MARGIN,
+                    1 => (bx + bh) - (w - MARGIN),
+                    _ => bx - w * 0.5,
+                };
+                egui::pos2(ox, my - MARGIN)
+            }
+        };
+        let full = egui::Rect::from_min_size(origin, full_size);
+        let pill = self.pill_rect_e(full, self.expanded);
         (full, pill)
     }
 
@@ -1429,7 +1967,8 @@ impl IslandApp {
             egui::pos2(wl as f32 + pill.left() * ppp, wt as f32 + pill.top() * ppp),
             egui::pos2(wl as f32 + pill.right() * ppp, wt as f32 + pill.bottom() * ppp),
         );
-        scr.expand(6.0 * ppp).contains(egui::pos2(cx as f32, cy as f32))
+        // 悬停判定贴近岛体本身：只留极小容差（物理像素），避免鼠标还没真正碰到岛就提前展开。
+        scr.expand(2.0).contains(egui::pos2(cx as f32, cy as f32))
     }
 
     /// 轮询全局左键+光标：在岛体上按下即可拖动窗口，松开时吸附到最近停靠位?
@@ -1444,9 +1983,15 @@ impl IslandApp {
         let (_win, pill) = self.layout_screen();
         let inside = pill.expand(3.0).contains(cur);
         // 只有“岛顶部条”可以发起拖动；内容区点击不劫持（留给模块内容点击）
+        // 拖动热区（屏幕逻辑坐标）：水平＝整条宽度；竖直＝收起时整条（更好点中），展开时只顶部 16px 作拖动条。
+        let handle_h = if self.expanded < 0.05 {
+            pill.height()
+        } else {
+            16.0_f32.min(pill.height())
+        };
         let handle = egui::Rect::from_min_max(
             egui::pos2(pill.left(), pill.top()),
-            egui::pos2(pill.right(), (pill.top() + 16.0).min(pill.bottom())),
+            egui::pos2(pill.right(), pill.top() + handle_h),
         )
         .expand(2.0);
         let on_ctrl = self.ctrl_hit.iter().any(|r| r.contains(cur));
@@ -1461,9 +2006,21 @@ impl IslandApp {
         if let Some(start) = self.drag_pending {
             if down {
                 if !self.dragging && (cur - start).length() > 4.0 {
-                    let (win, _p) = self.layout_screen();
+                    // 用“窗口真实矩形”来算抓手偏移，而不是用 layout 目标：若此刻窗口正处在
+                    // 上一次归位动画中途或与目标有偏差，用目标算会让岛体瞬间跳到指针下方。
+                    // 同时清掉未完成的归位动画，避免它每帧继续改窗口位置、和拖动打架。
+                    let (wl_px, wt_px, _wr_px, _wb_px) = platform::window_rect(self.hwnd);
+                    let win0 = egui::pos2(wl_px as f32 / ppp, wt_px as f32 / ppp);
+                    let local_full = egui::Rect::from_min_size(
+                        egui::pos2(0.0, 0.0),
+                        egui::vec2(W_EXPANDED + 2.0 * MARGIN, H_EXPANDED + 2.0 * MARGIN),
+                    );
+                    let lp0 = self.pill_rect_e(local_full, self.expanded);
+                    // 记录“指针相对岛体左上角”的偏移（而不是相对窗口），这样拖动/展开过程中
+                    // 岛体在窗口内的本地偏移即使变化，岛体也始终咬在指针原来的位置，不会跑到下方。
                     self.dragging = true;
-                    self.drag_off = cur - win.min;
+                    self.drag_off = cur - (win0 + lp0.min.to_vec2());
+                    self.settle = None;
                     self.hover_hold = None;
                     platform::capture_mouse(self.hwnd);
                 }
@@ -1475,61 +2032,140 @@ impl IslandApp {
             self.dragging = false;
             self.drag_pending = None;
             platform::release_mouse();
-            self.snap_to_nearest(cur);
+            // 松手归位：先记录“岛体（胶囊）此刻的真实屏幕位置”，再让 snap 改写停靠边/位置，
+            // 随后把窗口原点换算成“让岛体仍从原屏幕位置出发”的值。这样即使这次吸附把
+            // 停靠边从 上 切成 左/右（岛体在窗口内的本地偏移从顶部变到底部），归位动画也
+            // 只平滑移动、不会先“跳到角落”再弹回来。
+            let local_full = egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(W_EXPANDED + 2.0 * MARGIN, H_EXPANDED + 2.0 * MARGIN),
+            );
+            let lp_old = self.pill_rect_e(local_full, self.expanded);
+            let (wl0, wt0, _wr0, _wb0) = platform::window_rect(self.hwnd);
+            let bar_before = egui::pos2(wl0 as f32 / ppp, wt0 as f32 / ppp) + lp_old.min.to_vec2();
+            self.snap_to_nearest(cur, ppp);
             // 松手后 300ms 内不响应悬停，避免光标仍停在岛上立刻又展开
             self.hover_hold = Some(Instant::now() + Duration::from_millis(300));
-            // 归位动画：从松手位置平滑滑到顶部吸附点
-            let from = egui::pos2(self.last_geom.2, self.last_geom.3);
-            let (_f, pill) = self.layout_screen();
-            let to = egui::pos2(pill.center().x - (W_EXPANDED + 2.0 * MARGIN) * 0.5, -MARGIN);
+            // 用新的本地偏移，反推窗口原点，使岛体在 from 帧恰好停在 bar_before（视觉连续）。
+            let lp_new = self.pill_rect_e(local_full, self.expanded);
+            let (full, _pill) = self.layout_screen();
+            let to = full.min;
+            let from = bar_before - lp_new.min.to_vec2();
             self.settle = Some((from, to, Instant::now()));
         }
         self.drag_last_btn = down;
+        platform::set_dragging(self.dragging);
         if self.dragging {
             // 拖动期间保持置顶，避免落到别的窗口后面
             platform::keep_on_top(self.hwnd);
-            let desired = cur - self.drag_off;
             let win_w = W_EXPANDED + 2.0 * MARGIN;
-            let cw = self.collapsed_w();
-            let local_left = (win_w - cw) * 0.5;
-            let min_x = -local_left;
-            let max_x = (self.monitor.x - cw - local_left).max(min_x);
+            let win_h = H_EXPANDED + 2.0 * MARGIN;
+            // 岛体在窗口内真实偏移（随停靠边/展开度）：夹紧时按“岛体本身”保证整块留在桌面内，
+            // 而不是按窗口外框，避免侧边吸附（岛体垂直居中）时把岛拖出屏幕。
+            let placeholder = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(win_w, win_h));
+            let lp = self.pill_rect_e(placeholder, self.expanded);
+            // drag_off 是指针相对“岛体左上角”的偏移；岛体目标位置 = 指针 - 该偏移，
+            // 再减去岛体在窗口内的本地偏移，得到窗口原点。跟随指针恒准，与展开度/停靠边无关。
+            let bar_target = cur - self.drag_off;
+            let desired = bar_target - lp.min.to_vec2();
+            // 边界按“整个虚拟桌面”计算：可以拖到左右/上下的其它显示器。
+            let (vl, vt, vr, vb) = platform::virtual_screen_rect();
+            let (vl, vt, vr, vb) = (vl as f32 / ppp, vt as f32 / ppp, vr as f32 / ppp, vb as f32 / ppp);
+            let min_x = vl - lp.min.x;
+            let max_x = (vr - lp.max.x).max(min_x);
             let dx = desired.x.clamp(min_x, max_x);
-            let dy = desired.y.max(-MARGIN);
+            let min_y = vt - lp.min.y;
+            let max_y = (vb - lp.max.y).max(min_y);
+            let dy = desired.y.clamp(min_y, max_y);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(dx, dy)));
             self.last_geom.2 = dx;
             self.last_geom.3 = dy;
         }
     }
 
-    fn snap_to_nearest(&mut self, cur: egui::Pos2) {
-        let mx = self.monitor.x.max(1.0);
-        // 用松手瞬间的光标反推岛体中心（win.min = cur - drag_off；岛体中?= win.min + 半窗宽）?
-        // 不依赖上一帧可能滞后的窗口原点，保证能精确贴到最?最右角?
-        let cx = cur.x - self.drag_off.x + (W_EXPANDED + 2.0 * MARGIN) * 0.5;
-        let margin = (self.collapsed_w() * 0.5) / mx;
-        self.cfg.x_frac = (cx / mx).clamp(margin, 1.0 - margin);
+    /// 松手吸附：先判定岛体中心落在哪块显示器上，把停靠目标切换到该显示器，
+    /// 再判断岛体中心离“上 / 左 / 右”哪条边最近，贴到该边；沿边位置按拖放点换算并持久化。
+    fn snap_to_nearest(&mut self, _cur: egui::Pos2, ppp: f32) {
+        let win_w = W_EXPANDED + 2.0 * MARGIN;
+        let win_h = H_EXPANDED + 2.0 * MARGIN;
+        // 岛体（胶囊）在窗口内的本地矩形 → 换算成屏幕（逻辑）矩形。
+        // 用窗口“真实”矩形（GetWindowRect）来换算岛体当前实际屏幕位置：拖动时窗口会被边界夹紧，
+        // 此时 cur-drag_off 与真实窗口位置不一致，若用它折算落位会“跳到别处”。用真实矩形才等于“当前位置”。
+        let local = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(win_w, win_h));
+        let lp = self.pill_rect_e(local, self.expanded);
+        let (wl_px, wt_px, _wr_px, _wb_px) = platform::window_rect(self.hwnd);
+        let wl = wl_px as f32 / ppp;
+        let wt = wt_px as f32 / ppp;
+        let pill_min = egui::pos2(wl + lp.min.x, wt + lp.min.y);
+        let pill_max = egui::pos2(wl + lp.max.x, wt + lp.max.y);
+        let cx_log = (pill_min.x + pill_max.x) * 0.5;
+        let cy_log = (pill_min.y + pill_max.y) * 0.5;
+        // 换算成物理点，找到它所在的显示器（不在任何屏上也返回最近的一块）。
+        let px = (cx_log * ppp) as i32;
+        let py = (cy_log * ppp) as i32;
+        let mon = platform::monitor_rect_at(px, py).or_else(|| platform::monitor_rect_of_window(self.hwnd));
+        let (l, t, r, b) = match mon {
+            Some(v) => v,
+            None => (0, 0, self.monitor.x as i32, self.monitor.y as i32),
+        };
+        let ml = l as f32 / ppp;
+        let mt = t as f32 / ppp;
+        let mw = ((r - l) as f32 / ppp).max(1.0);
+        let mh = ((b - t) as f32 / ppp).max(1.0);
+        // 更新“当前显示器”的逻辑矩形与尺寸，后续 layout_screen/apply_geometry 以它为准。
+        self.monitor_rect = egui::Rect::from_min_size(egui::pos2(ml, mt), egui::vec2(mw, mh));
+        self.monitor = egui::vec2(mw, mh);
+        // 持久化：记录该显示器的物理左上角。
+        self.cfg.mon_x = l as f32;
+        self.cfg.mon_y = t as f32;
+        // 判断岛体“离上 / 左 / 右 哪条边的空隙最小”——用岛体真实边缘算空隙，而不是用中心距离。
+        // 胶囊是很宽的长条：当它靠向右上角时中心离右边还很远，用中心会误判为上吸附。
+        let gap_top = (pill_min.y - mt).max(0.0);
+        let gap_left = (pill_min.x - ml).max(0.0);
+        let gap_right = ((ml + mw) - pill_max.x).max(0.0);
+        let cw = self.collapsed_w();
+        if gap_top <= gap_left && gap_top <= gap_right {
+            // 顶部吸附：水平位置由拖放点换算 x_frac。
+            self.cfg.position = DockPosition::TopCenter;
+            let margin = (cw * 0.5) / mw;
+            self.cfg.x_frac = ((cx_log - ml) / mw).clamp(margin, 1.0 - margin);
+        } else {
+            // 侧边吸附：左右取空隙更小的一侧，纵向位置由拖放点换算 y_frac。
+            self.cfg.position = if gap_left <= gap_right {
+                DockPosition::LeftCenter
+            } else {
+                DockPosition::RightCenter
+            };
+            let margin = ((H_COLLAPSED + TOP_OVERLAP) * 0.5) / mh;
+            self.cfg.y_frac = ((cy_log - mt) / mh).clamp(margin, 1.0 - margin);
+        }
         self.cfg.save();
     }
 
-    /// 松手归位动画：从松手时的窗口原点平滑滑到顶部吸附点，?220ms，ease-out 缓动?
+    /// 松手归位动画：从松手时的窗口原点平滑滑到吸附点，ease-out 缓动（轻微回弹手感）。
     fn step_settle(&mut self, ctx: &egui::Context) {
         let dur = Duration::from_millis(260);
         if let Some((from, to, start)) = self.settle {
             let t = (start.elapsed().as_secs_f32() / dur.as_secs_f32()).clamp(0.0, 1.0);
-            // ease-out-back：末端轻微超过目标再回落，形?贴上去再弹一?的手感?
+            // ease-out-back：末端轻微超过目标再回落，形成“贴上去再弹一下”的手感。
             let c1 = 0.55_f32;
             let c3 = c1 + 1.0;
             let u = t - 1.0;
-            let e = 1.0 + c3 * u * u * u + c1 * u * u;
+            let mut e = 1.0 + c3 * u * u * u + c1 * u * u;
+            // 限制“越过目标”的量（沿 from→to 直线方向，最多约 8 逻辑像素），避免超调飞出屏幕。
+            let dist = (to - from).length();
+            if e > 1.0 && dist > 0.5 {
+                let tol = 8.0_f32;
+                e = e.min(1.0 + tol / dist);
+            }
             let p = from + (to - from) * e;
-            // 顶部吸附时超调会让窗口略微越过屏幕顶边；限制最多越?6 逻辑像素，避免岛被明显切掉?
-            let p = egui::pos2(p.x, p.y.max(-(MARGIN + 8.0)));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(p));
             self.last_geom.2 = p.x;
             self.last_geom.3 = p.y;
             if t >= 1.0 {
                 self.settle = None;
+                // 归位结束后再请求一帧：让 apply_geometry 用 SetWindowPos 精确落到贴边位置。
+                ctx.request_repaint();
             } else {
                 ctx.request_repaint_after(Duration::from_millis(8));
             }
@@ -1539,88 +2175,74 @@ impl IslandApp {
     fn apply_geometry(&mut self, ctx: &egui::Context) {
         let (full, _pill) = self.layout_screen();
         let (w, h) = (full.width(), full.height());
-        let origin = full.min;
+        let ppp = ctx.pixels_per_point();
         if (w - self.last_geom.0).abs() > 0.5 || (h - self.last_geom.1).abs() > 0.5 {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
         }
-        if (origin.x - self.last_geom.2).abs() > 0.5 || (origin.y - self.last_geom.3).abs() > 0.5 {
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(origin));
+        // 直接用 Win32 SetWindowPos 以“物理像素整数”精确定位窗口外框，绕开 winit
+        // OuterPosition 的取整/锚点偏差——那正是展开↔塌收大幅移动后窗口少走约 4px、
+        // 导致贴边留缝的根因。每帧按当前目标精确落位，位移连续，不使用反馈，绝不抖振。
+        let target_x = (full.min.x * ppp).round() as i32;
+        let target_y = (full.min.y * ppp).round() as i32;
+        if self.hwnd != 0 {
+            let (wl, wt, _wr, _wb) = platform::window_rect(self.hwnd);
+            if wl != target_x || wt != target_y {
+                platform::set_outer_position_px(self.hwnd, target_x, target_y);
+            }
         }
-        self.last_geom = (w, h, origin.x, origin.y);
+        self.last_geom = (w, h, full.min.x, full.min.y);
+        if std::env::var_os("WINISLE_GEOM_DEBUG").is_some() && self.hwnd != 0 {
+            let local_left = _pill.left() - full.left();
+            let local_top = _pill.top() - full.top();
+            let local_bot = _pill.bottom() - full.top();
+            let (wl, wt, _wr, _wb) = platform::window_rect(self.hwnd);
+            let pill_left_phys = wl as f32 + local_left * ppp;
+            let pill_top_phys = wt as f32 + local_top * ppp;
+            let pill_bot_phys = wt as f32 + local_bot * ppp;
+            let target_left_phys = self.monitor_rect.min.x * ppp;
+            use std::io::Write as _;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("D:\\LingDao\\_geom_debug.txt")
+            {
+                let _ = writeln!(
+                    f,
+                    "e={:.3} pos={:?} ppp={:.2} win=(L{} T{}) target=({},{}) pillL_phys={:.1} pillT_phys={:.1} pillB_phys={:.1} gapLeft={:.1}",
+                    self.expanded,
+                    self.cfg.position.as_str(),
+                    ppp,
+                    wl,
+                    wt,
+                    target_x,
+                    target_y,
+                    pill_left_phys,
+                    pill_top_phys,
+                    pill_bot_phys,
+                    pill_left_phys - target_left_phys
+                );
+            }
+        }
     }
 
     /// ?圆角区域"把窗口裁剪成当前岛体形状（随动画逐帧跟随，圆角半径与绘制一致）?
     /// 关键的圆角：区域必须是圆角矩形，不能是外接矩形——否则圆角外侧那一小块会留在窗口里
     /// 却是透明的，展开时沿两个圆角闪出白色缺口。这里用圆角区域把圆角也裁掉，形?绘制形状?
     /// 仅当区域(l,t,r,b,rad)变化时才调用 SetWindowRgn?
-    fn apply_region(&mut self, ctx: &egui::Context) {
+    fn apply_region(&mut self, _ctx: &egui::Context) {
+        // 不再用 1-bit 的窗口区域（HRGN）裁剪岛体形状。
+        // 原因：SetWindowRgn 的圆角边界是像素级阶梯，且会切断岛体圆角边缘约 0.75px 的
+        // 亚像素抗锯齿羽化带，使圆角/贴边处出现明显“锯齿”（A/B 实测：区域开=硬边锯齿，
+        // 区域关=平滑抗锯齿）。因此改用 DWM 的逐像素透明（with_transparent + blur-behind）
+        // 来呈现岛体，圆角交给 GPU 抗锯齿，边缘平滑。
+        // 鼠标穿透：由 WM_NCHITTEST 子类负责（set_hit_region 每帧更新命中矩形，透明边距
+        // 返回 HTTRANSPARENT），不再依赖窗口区域。
         if self.hwnd == 0 {
             return;
         }
-        if std::env::var_os("WINISLE_NO_REGION").is_some() {
-            if self.region != (0, 0, 0, 0, 0) {
-                platform::clear_window_region(self.hwnd);
-                self.region = (0, 0, 0, 0, 0);
-            }
-            return;
-        }
-        let ppp = ctx.pixels_per_point();
-        // 用“窗口本地坐标”计算岛体矩形（不做屏幕坐标换算）：这样无论窗口当前实际在屏幕何处
-        // （拖动时窗口原点每帧变化），区域都与窗口内绘制的岛体严格一致，不会因假设原点不同步而露出窗口边框。
-        let win = egui::Rect::from_min_size(
-            egui::pos2(0.0, 0.0),
-            egui::vec2(W_EXPANDED + 2.0 * MARGIN, H_EXPANDED + 2.0 * MARGIN),
-        );
-        let pill = self.pill_rect(win);
-
-        let winw = (win.width() * ppp).round() as i32;
-        let winh = (win.height() * ppp).round() as i32;
-
-        // 关键：窗口区域始终“贴合当前岛体形状”（逐帧跟随动画），绝不暴露整个窗口矩形。
-        // —— 这样动画途中不会出现“展开后大小”的整块窗口（含窗口边框/阴影），
-        //    只在面板自身范围内改变形状；窗口边缘一栏被裁掉，故看不到边框。
-        // 逐帧改变区域可能触发 WM_ERASEBKGND（已由 erase_guard 拦截，不会白擦）。
-        let target: (i32, i32, i32, i32, i32) = if !self.island_visible {
-            (0, 0, 1, 1, 0)
-        } else {
-            let pad = (1.0 * ppp).round() as i32;
-            let clampi = |v: i32, lo: i32, hi: i32| v.max(lo).min(hi);
-            let l = clampi(((pill.left() - win.left()) * ppp).round() as i32 - pad, 0, winw);
-            let t = clampi(((pill.top() - win.top()) * ppp).round() as i32 - pad, 0, winh);
-            let r = clampi(((pill.right() - win.left()) * ppp).round() as i32 + pad, 0, winw);
-            let b = clampi(((pill.bottom() - win.top()) * ppp).round() as i32 + pad, 0, winh);
-            let rad_l = self.cfg.radius.min(pill.height() * 0.5).min(pill.width() * 0.5);
-            let rad = ((rad_l * ppp).round() as i32 + pad).max(1);
-            (l, t, r.max(l + 1), b.max(t + 1), rad)
-        };
-        if target != self.region {
-            // 动画/拖动过程中不要逐帧重建窗口区域：SetWindowRgn 每帧调用会明显掉帧。
-            // 过渡期间只“扩张不收缩”（用新旧区域的并集），等动画结束落定后再一次性裁到最终形状。
-            let transitioning = (self.expanded - self.target).abs() > 0.002
-                || (self.music_amt > 0.001 && self.music_amt < 0.999)
-                || self.dragging
-                || self.settle.is_some();
-            let mut apply = target;
-            if transitioning && self.region.0 != i32::MIN && !(self.region.2 <= 1 && self.region.3 <= 1) {
-                let (pl, pt, pr, pb, prad) = self.region;
-                apply = (
-                    target.0.min(pl),
-                    target.1.min(pt),
-                    target.2.max(pr),
-                    target.3.max(pb),
-                    target.4.max(prad),
-                );
-            }
-            if apply != self.region {
-                let cr = self.cfg.position.corner_radius(1.0);
-                let _rt = std::time::Instant::now();
-                platform::set_window_region_round(
-                    self.hwnd, apply.0, apply.1, apply.2, apply.3, apply.4,
-                    cr.nw == 0, cr.ne == 0, cr.sw == 0, cr.se == 0,
-                );
-                self.perf_region_ms = _rt.elapsed().as_secs_f32() * 1000.0;
-                self.region = apply;
-            }
+        if self.region != (0, 0, 0, 0, 0) {
+            platform::clear_window_region(self.hwnd);
+            self.region = (0, 0, 0, 0, 0);
         }
     }
 
@@ -1645,11 +2267,13 @@ impl IslandApp {
         if self.expanded > 0.02 && self.expanded < 0.98 {
             return;
         }
-        let has = self.music_amt > 0.01;
         if e < 0.5 {
+            self.draw_collapsed_bar(ui, &painter, pill, e, t);
+        } else if false {
+            let has = self.music_amt > 0.01;
             let a = ((0.5 - e) * 2.0 * 255.0) as u8;
             let amt = self.music_amt.clamp(0.0, 1.0);
-            let am = (a as f32 * amt) as u8; // 音乐内容的淡入淡出
+            let am = (a as f32 * amt) as u8; // 音乐内容的淡入淡�?
             let mut time_rect: Option<egui::Rect> = None;
             if has {
                 let fg = egui::Color32::from_rgba_unmultiplied(238, 240, 246, am);
@@ -1662,7 +2286,7 @@ impl IslandApp {
                     time_s = format!("{}:{:02}", time_s, st.wSecond);
                 }
                 let time_font = bold_font(14.0);
-                // 右侧内容宽度按「升级胶囊 + 时间」动态计算，岛体宽度也同步变化
+                // 右侧内容宽度按「升级胶�?+ 时间」动态计算，岛体宽度也同步变�?
                 let time_w = painter
                     .layout_no_wrap(time_s.clone(), time_font.clone(), fg)
                     .size()
@@ -1677,23 +2301,48 @@ impl IslandApp {
                 let lyric_font = egui::FontId::proportional(14.0);
                 // 行框底部会低于汉字实际墨迹底部约 3pt，这里减掉，使频谱底边与歌词/时间文字底边齐平
                 let base_y = cy + painter
-                    .layout_no_wrap("国".to_owned(), lyric_font, fg)
+                    .layout_no_wrap("音".to_owned(), lyric_font, fg)
                     .size()
                     .y
                     * 0.5
                     - 3.0;
 
-                for k in 0..3 {
-                    let ph = (t * 4.4 + (k as f64) * 1.4).sin() as f32 * 0.5 + 0.5;
-                    let hgt = 4.0 + ph * 9.0;
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(
-                            egui::pos2(sx + (k as f32) * 5.0, base_y - hgt),
-                            egui::pos2(sx + (k as f32) * 5.0 + 3.0, base_y),
-                        ),
-                        1.5,
-                        green,
-                    );
+                // 频谱速度自适应：按歌曲「歌词密度 / 节奏」估算快慢（纯音乐 / 无歌词回退基准速度）
+                {
+                    let base_speed = 5.2f32;
+                    let fac = {
+                        let n = self.lyr_lines.len();
+                        if n >= 4 {
+                            let dur = (self.lyr_lines[n - 1].t - self.lyr_lines[0].t).max(1.0);
+                            let chars: usize = self.lyr_lines.iter().map(|l| l.text.chars().count()).sum();
+                            let cps = chars as f64 / dur; // 每秒字数：慢歌 ~2，快歌 ~6+
+                            let f_cps = ((cps - 2.0) / 4.0).clamp(0.0, 1.0) as f32;
+                            let gap = dur / (n - 1) as f64; // 平均每句时长（秒）
+                            let f_gap = ((8.0 - gap) / 6.0).clamp(0.0, 1.0) as f32;
+                            let mix = f_cps * 0.6 + f_gap * 0.4;
+                            0.78 + mix * 0.62 // 0.78× ~ 1.40×
+                        } else {
+                            1.0
+                        }
+                    };
+                    let target = base_speed * fac;
+                    let dt = ((t - self.spec_last_t) as f32).clamp(0.0, 0.1);
+                    self.spec_last_t = t;
+                    let ksm = 1.0 - (-dt / 0.4).exp();
+                    self.spec_speed += (target - self.spec_speed) * ksm;
+                    self.spec_phase += (dt * self.spec_speed) as f64;
+                    for k in 0..3 {
+                        let ph = (self.spec_phase + (k as f64) * 1.4).sin() as f32 * 0.5 + 0.5;
+                        let hgt = 4.0 + ph * 9.0;
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(sx + (k as f32) * 5.0, base_y - hgt),
+                                egui::pos2(sx + (k as f32) * 5.0 + 3.0, base_y),
+                            ),
+                            1.5,
+                            green,
+                        );
+                    }
                 }
                 // 中间滚动：优先显示当前歌词（逐字渐绿），无歌词则显示 歌名 · 歌手
                 let base = egui::Color32::from_rgba_unmultiplied(200, 205, 218, am);
@@ -1703,11 +2352,15 @@ impl IslandApp {
                     egui::pos2(sx + 22.0, pill.top()),
                     egui::vec2((badge_left - 10.0) - (sx + 22.0), pill.height()),
                 );
-                let cur = self.cur_lyric_idx();
-                if let Some(i) = cur {
+                let instrumental = lyrics::is_instrumental(&self.lyr_lines);
+                let cur = if instrumental { None } else { self.cur_lyric_idx() };
+                if instrumental {
+                    // 纯音乐：收起态直接显示“纯音乐，请欣赏”，与展开态一致�?
+                    self.draw_marquee(&painter, text_rect, lyrics::INSTRUMENTAL_TEXT, egui::FontId::proportional(14.0), fg, t, false);
+                } else if let Some(i) = cur {
                     let line = self.lyr_lines[i].text.clone();
                     let prog = self.line_progress(i);
-                    // 用"这一句已经唱了多久"作为滚动相位：换到新的一句时跑马灯从最左重新开始
+                    // �?这一句已经唱了多�?作为滚动相位：换到新的一句时跑马灯从最左重新开�?
                     let lt = (self.lyric_time() - self.lyr_lines[i].t).max(0.0);
                     // 换行上滚动画：上一句向上滚出并淡出，当前句从下方滚入（ease-out-cubic）
                     let roll_dur = self.cfg.roll_ms.clamp(50.0, 2000.0);
@@ -1739,16 +2392,16 @@ impl IslandApp {
                             let obase = egui::Color32::from_rgba_unmultiplied(200, 205, 218, oa);
                             self.draw_lyric_offset(
                                 &painter, text_rect, text_rect, ody, ot,
-                                egui::FontId::proportional(14.0), obase, obase, 0.0, *olt,
+                                egui::FontId::proportional(14.0), obase, obase, 0.0, *olt, false,
                             );
                         }
                         let ndy = lh * (1.0 - roll);
                         self.draw_lyric_offset(
                             &painter, text_rect, text_rect, ndy, &line,
-                            egui::FontId::proportional(14.0), base, fill_green, prog, lt,
+                            egui::FontId::proportional(14.0), base, fill_green, prog, lt, false,
                         );
                     } else {
-                        self.draw_lyric_line(&painter, text_rect, &line, egui::FontId::proportional(14.0), base, fill_green, prog, lt);
+                        self.draw_lyric_line(&painter, text_rect, &line, egui::FontId::proportional(14.0), base, fill_green, prog, lt, false);
                     }
                 } else {
                     let text = if self.music.title.is_empty() {
@@ -1758,7 +2411,7 @@ impl IslandApp {
                     } else {
                         format!("{} · {}", self.music.title, self.music.artist)
                     };
-                    self.draw_marquee(&painter, text_rect, &text, egui::FontId::proportional(14.0), fg, t);
+                    self.draw_marquee(&painter, text_rect, &text, egui::FontId::proportional(14.0), fg, t, false);
                 }
                 // 右侧时间（升级胶囊在它左边）
                 time_rect = Some(painter.text(
@@ -1809,11 +2462,11 @@ impl IslandApp {
                 if self.cfg.show_seconds {
                     s = format!("{}:{:02}", s, st.wSecond);
                 }
-                let centered_a = (a as f32 * (1.0 - amt)) as u8; // 无音乐时居中时间，随音乐淡入而淡出
+                let centered_a = (a as f32 * (1.0 - amt)) as u8; // 无音乐时居中时间，随音乐淡入而淡�?
                 let col = egui::Color32::from_rgba_unmultiplied(238, 240, 246, centered_a);
                 let font = bold_font(self.cfg.font);
                 if self.show_time_update() {
-                    // 「↑ 升级」+ 时间整体居中
+                    // 「↑ 升级�? 时间整体居中
                     let time_w = painter
                         .layout_no_wrap(s.clone(), font.clone(), col)
                         .size()
@@ -1833,18 +2486,268 @@ impl IslandApp {
                         col,
                     ));
                 } else {
-                    // 无音乐时只居中显示时间
-                    time_rect = Some(painter.text(
-                        egui::pos2(pill.center().x, pill.center().y - self.cfg.font * 0.06),
-                        egui::Align2::CENTER_CENTER,
-                        &s,
-                        font,
-                        col,
-                    ));
+                    // 无音乐、无升级：左侧常显天气（图标 + 温度 + 天气），右侧时间�?
+                    if let Some(w) = self.w_data.as_ref() {
+                        let f = self.cfg.weather_unit == 1;
+                        let sky = weather::sky_of(&w.today_type, st.wHour >= 18 || st.wHour < 6);
+                        let cy = pill.center().y;
+                        let tcol = egui::Color32::from_rgba_unmultiplied(238, 240, 246, centered_a);
+                        let dim = egui::Color32::from_rgba_unmultiplied(150, 158, 175, centered_a);
+                        let bgm = egui::Color32::from_rgb(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2]);
+                        draw_weather_icon(&painter, sky, egui::pos2(pill.left() + 18.0, cy), 20.0, centered_a, t, bgm);
+                        let temp = weather::conv_temp(w.temp, f);
+                        painter.text(egui::pos2(pill.left() + 34.0, cy - 0.5), egui::Align2::LEFT_CENTER, format!("{:.0}°", temp), bold_font(13.5), tcol);
+                        if !w.today_type.is_empty() {
+                            painter.text(egui::pos2(pill.left() + 66.0, cy), egui::Align2::LEFT_CENTER, &w.today_type, egui::FontId::proportional(11.0), dim);
+                        }
+                        time_rect = Some(painter.text(
+                            egui::pos2(pill.right() - 13.0, cy - self.cfg.font * 0.06),
+                            egui::Align2::RIGHT_CENTER,
+                            &s,
+                            bold_font(13.5),
+                            tcol,
+                        ));
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+                    } else {
+                        // 无天气数据时只居中显示时�?
+                        time_rect = Some(painter.text(
+                            egui::pos2(pill.center().x, pill.center().y - self.cfg.font * 0.06),
+                            egui::Align2::CENTER_CENTER,
+                            &s,
+                            font,
+                            col,
+                        ));
+                    }
                 }
             }
         } else {
             self.draw_expanded_panel(ui, &painter, pill, e, t);
+        }
+    }
+
+    /// 收起态：按用户配置的组件顺序横向拼接绘制（频谱/歌词/表情/时间/天气）。
+    fn draw_collapsed_bar(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, pill: egui::Rect, e: f32, t: f64) {
+        let a = ((0.5 - e) * 2.0 * 255.0).clamp(0.0, 255.0) as u8;
+        let am = (a as f32 * self.music_amt.clamp(0.0, 1.0)) as u8;
+        let st = platform::local_time();
+        let comps = self.active_comps();
+        let clip_p = painter.with_clip_rect(pill);
+        let painter: &egui::Painter = &clip_p;
+        let cy = pill.center().y;
+        let fg = egui::Color32::from_rgba_unmultiplied(238, 240, 246, a);
+        let green = egui::Color32::from_rgba_unmultiplied(64, 214, 160, am);
+        let lyric_font = egui::FontId::proportional(14.0);
+        let base_y = cy + painter.layout_no_wrap("音".to_owned(), lyric_font, fg).size().y * 0.5 - 3.0;
+        let total: f32 = comps.iter().map(|(_, w)| *w).sum::<f32>()
+            + if comps.len() > 1 { (comps.len() - 1) as f32 * CB_GAP } else { 0.0 };
+        let mut x = pill.left() + ((pill.width() - total).max(0.0)) * 0.5;
+        for (i, (id, cw)) in comps.iter().enumerate() {
+            if i > 0 {
+                x += CB_GAP;
+            }
+            if x > pill.right() - 2.0 {
+                break;
+            }
+            let x1 = (x + *cw).min(pill.right() - 2.0);
+            match id.as_str() {
+                "spectrum" => {
+                    self.draw_spectrum(painter, x, base_y, green, t);
+                }
+                "lyrics" => {
+                    let tr = egui::Rect::from_min_size(egui::pos2(x, pill.top()), egui::vec2((x1 - x).max(1.0), pill.height()));
+                    let base = egui::Color32::from_rgba_unmultiplied(200, 205, 218, am);
+                    self.draw_collapsed_lyrics(painter, tr, fg, base, green, am, t);
+                }
+                "clock" => {
+                    self.draw_collapsed_clock(painter, x, x1, cy, a, st);
+                }
+                "weather" => {
+                    self.draw_collapsed_weather(painter, x, x1, cy, a, t, st);
+                }
+                "face" => {
+                    let idx = self.cfg.idle_face as usize;
+                    self.ensure_face_frames(ui.ctx(), idx);
+                    let metas = Self::face_anim_meta();
+                    let fc = metas
+                        .get(idx)
+                        .map(|(_, _, fc, _)| *fc as usize)
+                        .unwrap_or(1);
+                    // 先取 UV 裁剪盒（&mut self），再借 texture，避免借用冲突。
+                    let (u0, v0, u1, v1) = self.face_content_uv(idx);
+                    let frame = (((t * 1000.0) / 80.0) as usize) % fc.max(1);
+                    let tex = self
+                        .face_frames
+                        .get(idx)
+                        .and_then(|o| o.as_ref())
+                        .and_then(|v| v.get(frame));
+                    let cx = (x + x1) * 0.5;
+                    let slot_w = (x1 - x).max(8.0);
+                    // 按“不透明内容”包围盒裁剪并铺满槽宽，使表情模块的可视宽度≈槽宽，
+                    // 这样它与相邻模块之间的实际间隙才等于 CB_GAP(10px)。
+                    let (pw, ph) = metas
+                        .get(idx)
+                        .map(|(w, h, _, _)| (*w as f32, *h as f32))
+                        .unwrap_or((77.0, 80.0));
+                    let content_aspect =
+                        ((pw * (u1 - u0)) / (ph * (v1 - v0)).max(1.0)).max(0.2);
+                    let max_h = (pill.height() * 1.2).max(10.0);
+                    let fw = slot_w.min(max_h * content_aspect);
+                    let fh = fw / content_aspect;
+                    if let Some(tx) = tex {
+                        draw_face_img_cropped(
+                            painter,
+                            egui::pos2(cx, cy),
+                            fw,
+                            fh,
+                            a,
+                            tx,
+                            (u0, v0, u1, v1),
+                            FACE_EYE_GAP_REDUCE,
+                        );
+                    } else {
+                        draw_robot_face(painter, egui::pos2(cx, cy), fh, a, self.cfg.idle_face, t, tex);
+                    }
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(40));
+                }
+                _ => {}
+            }
+            x = x1;
+        }
+        if self.music_amt > 0.01 {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        }
+        if comps.iter().any(|(id, _)| id.as_str() == "weather") {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+        }
+    }
+
+    /// 收起态频谱：3 根随歌词密度自适应速度跳动的绿色竖条。
+    fn draw_spectrum(&mut self, painter: &egui::Painter, sx: f32, base_y: f32, green: egui::Color32, t: f64) {
+        let base_speed = 5.2f32;
+        let fac = {
+            let n = self.lyr_lines.len();
+            if n >= 4 {
+                let dur = (self.lyr_lines[n - 1].t - self.lyr_lines[0].t).max(1.0);
+                let chars: usize = self.lyr_lines.iter().map(|l| l.text.chars().count()).sum();
+                let cps = chars as f64 / dur;
+                let f_cps = ((cps - 2.0) / 4.0).clamp(0.0, 1.0) as f32;
+                let gap = dur / (n - 1) as f64;
+                let f_gap = ((8.0 - gap) / 6.0).clamp(0.0, 1.0) as f32;
+                let mix = f_cps * 0.6 + f_gap * 0.4;
+                0.78 + mix * 0.62
+            } else {
+                1.0
+            }
+        };
+        let target = base_speed * fac;
+        let dt = ((t - self.spec_last_t) as f32).clamp(0.0, 0.1);
+        self.spec_last_t = t;
+        let ksm = 1.0 - (-dt / 0.4).exp();
+        self.spec_speed += (target - self.spec_speed) * ksm;
+        self.spec_phase += (dt * self.spec_speed) as f64;
+        for k in 0..3 {
+            let ph = (self.spec_phase + (k as f64) * 1.4).sin() as f32 * 0.5 + 0.5;
+            let hgt = 4.0 + ph * 9.0;
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(sx + (k as f32) * 5.0, base_y - hgt),
+                    egui::pos2(sx + (k as f32) * 5.0 + 3.0, base_y),
+                ),
+                1.5,
+                green,
+            );
+        }
+    }
+
+    /// 收起态歌词槽：当前歌词（逐字渐绿 + 换行上滚）或无歌词时歌名·歌手。
+    /// 槽宽固定 250；文字放得下就居中显示，放不下就从头部只滚一遍、滚到能完整显示即停。
+    fn draw_collapsed_lyrics(&mut self, painter: &egui::Painter, text_rect: egui::Rect, fg: egui::Color32, base: egui::Color32, green: egui::Color32, am: u8, t: f64) {
+        let fill_green = if self.cfg.char_green { green } else { base };
+        let instrumental = lyrics::is_instrumental(&self.lyr_lines);
+        let cur = if instrumental { None } else { self.cur_lyric_idx() };
+        if instrumental {
+            self.draw_marquee(painter, text_rect, lyrics::INSTRUMENTAL_TEXT, egui::FontId::proportional(14.0), fg, t, false);
+        } else if let Some(i) = cur {
+            let line = self.lyr_lines[i].text.clone();
+            let prog = self.line_progress(i);
+            let lt = (self.lyric_time() - self.lyr_lines[i].t).max(0.0);
+            let roll_dur = self.cfg.roll_ms.clamp(50.0, 2000.0);
+            let mut roll = 1.0f32;
+            let mut old: Option<(String, f64)> = None;
+            if self.cfg.roll_anim {
+                if let Some(at) = self.lyr_anim_at {
+                    let el = at.elapsed().as_secs_f32() * 1000.0;
+                    if el < roll_dur {
+                        let p = (el / roll_dur).clamp(0.0, 1.0);
+                        roll = 1.0 - (1.0 - p).powi(3);
+                        if let Some(pf) = self.lyr_anim_from {
+                            if pf != i && pf < self.lyr_lines.len() {
+                                let olt = (self.lyric_time() - self.lyr_lines[pf].t).max(0.0);
+                                old = Some((self.lyr_lines[pf].text.clone(), olt));
+                            }
+                        }
+                    } else {
+                        self.lyr_anim_at = None;
+                        self.lyr_anim_from = None;
+                    }
+                }
+            }
+            if roll < 1.0 {
+                let lh = text_rect.height().max(1.0);
+                if let Some((ot, olt)) = &old {
+                    let ody = -lh * roll;
+                    let oa = ((am as f32) * (1.0 - roll)).clamp(0.0, 255.0) as u8;
+                    let obase = egui::Color32::from_rgba_unmultiplied(200, 205, 218, oa);
+                    self.draw_lyric_offset(painter, text_rect, text_rect, ody, ot, egui::FontId::proportional(14.0), obase, obase, 0.0, *olt, false);
+                }
+                let ndy = lh * (1.0 - roll);
+                self.draw_lyric_offset(painter, text_rect, text_rect, ndy, &line, egui::FontId::proportional(14.0), base, fill_green, prog, lt, false);
+            } else {
+                self.draw_lyric_line(painter, text_rect, &line, egui::FontId::proportional(14.0), base, fill_green, prog, lt, false);
+            }
+        } else {
+            let text = if self.music.title.is_empty() {
+                "正在播放".to_owned()
+            } else if self.music.artist.is_empty() {
+                self.music.title.clone()
+            } else {
+                format!("{} · {}", self.music.title, self.music.artist)
+            };
+            self.draw_marquee(painter, text_rect, &text, egui::FontId::proportional(14.0), fg, t, false);
+        }
+    }
+
+    /// 收起态时钟槽：居中/右对齐显示时间；需要时在左侧画「升级」胶囊。
+    fn draw_collapsed_clock(&mut self, painter: &egui::Painter, x: f32, x1: f32, cy: f32, a: u8, st: platform::SYSTEMTIME) {
+        let mut s = format!("{:02}:{:02}", st.wHour, st.wMinute);
+        if self.cfg.show_seconds {
+            s = format!("{}:{:02}", s, st.wSecond);
+        }
+        let tcol = egui::Color32::from_rgba_unmultiplied(238, 240, 246, a);
+        let right = x1 - 2.0;
+        if self.show_time_update() {
+            let br = egui::Rect::from_min_size(egui::pos2(x, cy - UPD_BADGE_H * 0.5), egui::vec2(UPD_BADGE_W, UPD_BADGE_H));
+            self.paint_update_pill(painter, br, a);
+            painter.text(egui::pos2(right, cy - self.cfg.font * 0.06), egui::Align2::RIGHT_CENTER, &s, bold_font(13.5), tcol);
+        } else {
+            painter.text(egui::pos2((x + right) * 0.5, cy - self.cfg.font * 0.06), egui::Align2::CENTER_CENTER, &s, bold_font(13.5), tcol);
+        }
+    }
+
+    /// 收起态天气槽：天气图标 + 温度（+ 类型）。
+    fn draw_collapsed_weather(&self, painter: &egui::Painter, x: f32, _x1: f32, cy: f32, a: u8, t: f64, st: platform::SYSTEMTIME) {
+        if let Some(w) = self.w_data.as_ref() {
+            let f = self.cfg.weather_unit == 1;
+            let sky = weather::sky_of(&w.today_type, st.wHour >= 18 || st.wHour < 6);
+            let tcol = egui::Color32::from_rgba_unmultiplied(238, 240, 246, a);
+            let dim = egui::Color32::from_rgba_unmultiplied(150, 158, 175, a);
+            let bgm = egui::Color32::from_rgb(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2]);
+            draw_weather_icon(painter, sky, egui::pos2(x + 12.0, cy), 20.0, a, t, bgm);
+            let temp = weather::conv_temp(w.temp, f);
+            painter.text(egui::pos2(x + 28.0, cy - 0.5), egui::Align2::LEFT_CENTER, format!("{:.0}°", temp), bold_font(13.5), tcol);
+            if !w.today_type.is_empty() {
+                painter.text(egui::pos2(x + 56.0, cy), egui::Align2::LEFT_CENTER, &w.today_type, egui::FontId::proportional(11.0), dim);
+            }
         }
     }
 
@@ -1876,19 +2779,20 @@ impl IslandApp {
         font: egui::FontId,
         color: egui::Color32,
         t: f64,
+        left_align: bool,
     ) {
         let galley = painter.layout_no_wrap(text.to_owned(), font, color);
         let tw = galley.size().x;
         let y = rect.center().y - galley.size().y * 0.5;
         if tw <= rect.width() {
-            painter.galley(egui::pos2(rect.center().x - tw * 0.5, y), galley, color);
+            let lx = if left_align { rect.left() } else { rect.center().x - tw * 0.5 };
+            painter.galley(egui::pos2(lx, y), galley, color);
         } else {
+            // 只滚一遍：从头部开始，滚到句尾与右边界对齐即停住，不再循环重复。
             let clip = painter.with_clip_rect(rect);
-            let gap = 40.0;
-            let span = tw + gap;
-            let off = ((t * 28.0) as f32) % span;
-            clip.galley(egui::pos2(rect.left() - off, y), galley.clone(), color);
-            clip.galley(egui::pos2(rect.left() - off + span, y), galley, color);
+            let max_off = (tw - rect.width()).max(0.0);
+            let off = ((t * 28.0) as f32).min(max_off);
+            clip.galley(egui::pos2(rect.left() - off, y), galley, color);
         }
     }
 
@@ -2011,12 +2915,13 @@ impl IslandApp {
         fill: egui::Color32,
         prog: f32,
         t: f64,
+        left_align: bool,
     ) {
         let galley = painter.layout_no_wrap(text.to_owned(), font.clone(), base);
         let tw = galley.size().x;
         let y = rect.center().y - galley.size().y * 0.5;
         let scroll = tw > rect.width();
-        // 只滚一遍：滚到句尾与右边对齐就停住，不再循环重复展示
+        // 只滚一遍：滚到句尾与右边对齐就停住，不再循环重复展�?
         let off = if scroll {
             let max_off = (tw - rect.width()).max(0.0);
             ((t * 30.0) as f32).min(max_off)
@@ -2033,6 +2938,8 @@ impl IslandApp {
         for k in 0..1 {
             let left = if scroll {
                 rect.left() - off + (k as f32) * tw
+            } else if left_align {
+                rect.left()
             } else {
                 rect.center().x - tw * 0.5
             };
@@ -2054,7 +2961,7 @@ impl IslandApp {
     }
 
     /// 画一行歌词（支持竖直偏移 dy 与自定义裁剪 clip），供收起态“上滚”动画使用：
-    /// base 打底，prog>0 时从左到右用 fill 渐绿；过长则横向滚动（只滚一遍，滚到句尾停住）。
+    /// base 打底，prog>0 时从左到右用 fill 渐绿；过长则横向滚动（只滚一遍，滚到句尾停住）�?
     #[allow(clippy::too_many_arguments)]
     fn draw_lyric_offset(
         &self,
@@ -2068,6 +2975,7 @@ impl IslandApp {
         fill: egui::Color32,
         prog: f32,
         t: f64,
+        left_align: bool,
     ) {
         let galley = painter.layout_no_wrap(text.to_owned(), font.clone(), base);
         let tw = galley.size().x;
@@ -2082,6 +2990,8 @@ impl IslandApp {
         };
         let left = if scroll {
             rect.left() - off
+        } else if left_align {
+            rect.left()
         } else {
             rect.center().x - tw * 0.5
         };
@@ -2123,7 +3033,7 @@ impl IslandApp {
         let dt = ui.ctx().input(|i| i.stable_dt).clamp(0.0, 0.1);
         let playing_now = self.is_playing();
         if playing_now {
-            self.disc_angle = (self.disc_angle + dt * 0.45) % std::f32::consts::TAU; // 约 14s/圈（放慢）
+            self.disc_angle = (self.disc_angle + dt * 0.45) % std::f32::consts::TAU; // �?14s/圈（放慢�?
         }
         let arm_target = if playing_now { -22.0 } else { -40.0 };
         let k = (1.0 - (-dt * 9.0).exp()).clamp(0.0, 1.0);
@@ -2147,8 +3057,8 @@ impl IslandApp {
             egui::vec2(tt_size, tt_size),
         );
         let dc = tt_rect.center();
-        let vinyl_r = 64.2 / 180.0 * tt_size; // 黑胶半径（灰环再细约2px）
-        let cover_r = 46.6 / 180.0 * tt_size; // 中心封面半径（再放大 ~3px 物理）
+        let vinyl_r = 64.2 / 180.0 * tt_size; // 黑胶半径（灰环再细约2px�?
+        let cover_r = 46.6 / 180.0 * tt_size; // 中心封面半径（再放大 ~3px 物理�?
         // 1) 最外灰色环
         painter.circle_filled(dc, outer_r, egui::Color32::from_rgba_unmultiplied(54, 58, 66, a));
         
@@ -2251,39 +3161,73 @@ impl IslandApp {
         let title = if self.music.title.is_empty() { "未知曲目".to_string() } else { self.music.title.clone() };
         let artist = self.music.artist.clone();
         let avail = (cx1 - tx).max(40.0);
+        // 单行省略：用 LayoutJob 限制为 1 行 + 溢出字符「…」，保证文字完整可读、绝不越界被裁切
+        let one_line = |text: &str, font: egui::FontId, color: egui::Color32, maxw: f32| -> std::sync::Arc<egui::Galley> {
+            let mut job = egui::text::LayoutJob::single_section(
+                text.to_string(),
+                egui::TextFormat { font_id: font, color, ..Default::default() },
+            );
+            job.wrap.max_width = maxw;
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
+            job.wrap.overflow_character = Some('…');
+            ui.fonts(|f| f.layout_job(job))
+        };
         let af = egui::FontId::proportional(12.0);
-        // 歌名与歌手之间留出固定间隙，连接符「-」在间隙里水平、垂直都居中
         let gap = if artist.is_empty() { 0.0 } else { 16.0 };
         let aw = if artist.is_empty() {
             0.0
         } else {
             ui.fonts(|f| f.layout_no_wrap(artist.clone(), af.clone(), dim).size().x)
         };
-        // 歌名自适应字号，确保「歌名 - 歌手」能在一行内展示
-        let mut tsz = 16.0f32;
-        let mut tw = 0.0f32;
-        loop {
-            let tf = bold_font(tsz);
-            tw = ui.fonts(|f| f.layout_no_wrap(title.clone(), tf, ink).size().x);
-            if tw + gap + aw <= avail || tsz <= 11.5 {
+        // 优先单行「歌名 - 歌手」：只要在可读字号（>=12.5）下能完整放下，就保持一行
+        let mut fit_tsz: Option<f32> = None;
+        let mut s = 15.5f32;
+        while s >= 12.5 - 1e-3 {
+            let w = ui.fonts(|f| f.layout_no_wrap(title.clone(), bold_font(s), ink).size().x);
+            if w + gap + aw <= avail {
+                fit_tsz = Some(s);
                 break;
             }
-            tsz -= 1.0;
+            s -= 0.5;
         }
-        // 三个元素共用同一条垂直中线，保证歌名、连接符、歌手在同一水平线上
-        let title_cy = rect.top() + CONTENT_PAD_T + 41.0 - 10.0;
-        painter.text(
-            egui::pos2(tx, title_cy),
-            egui::Align2::LEFT_CENTER,
-            &title,
-            bold_font(tsz),
-            ink,
-        );
-        if !artist.is_empty() {
-            let mid_x = tx + tw + gap * 0.5;
-            let artist_x = tx + tw + gap;
-            painter.text(egui::pos2(mid_x, title_cy), egui::Align2::CENTER_CENTER, "-", af.clone(), dim);
-            painter.text(egui::pos2(artist_x, title_cy), egui::Align2::LEFT_CENTER, &artist, af, dim);
+        let title_cy_single = rect.top() + CONTENT_PAD_T + 31.0;
+        if let Some(ts) = fit_tsz {
+            // —— 一行完整显示 ——
+            let tf = bold_font(ts);
+            let tw = ui.fonts(|f| f.layout_no_wrap(title.clone(), tf.clone(), ink).size().x);
+            painter.text(egui::pos2(tx, title_cy_single), egui::Align2::LEFT_CENTER, &title, tf, ink);
+            if !artist.is_empty() {
+                let mid_x = tx + tw + gap * 0.5;
+                let ax = tx + tw + gap;
+                painter.text(egui::pos2(mid_x, title_cy_single), egui::Align2::CENTER_CENTER, "-", af.clone(), dim);
+                painter.text(egui::pos2(ax, title_cy_single), egui::Align2::LEFT_CENTER, &artist, af, dim);
+            }
+        } else {
+            // —— 一行放不下：两行显示（歌名自适应/必要时省略，歌手独占第二行完整显示）——
+            let mut tsz = 15.5f32;
+            loop {
+                let w = ui.fonts(|f| f.layout_no_wrap(title.clone(), bold_font(tsz), ink).size().x);
+                if w <= avail || tsz <= 12.5 { break; }
+                tsz -= 0.5;
+            }
+            let tf = bold_font(tsz);
+            let af2 = egui::FontId::proportional(11.5);
+            let (title_cy, artist_cy) = if artist.is_empty() {
+                (rect.top() + CONTENT_PAD_T + 31.0, 0.0)
+            } else {
+                (rect.top() + CONTENT_PAD_T + 23.0, rect.top() + CONTENT_PAD_T + 39.0)
+            };
+            let tg = one_line(&title, tf, ink, avail);
+            painter.galley(egui::pos2(tx, title_cy - tg.size().y * 0.5), tg, ink);
+            if !artist.is_empty() {
+                let prefix = "— ";
+                let pw = ui.fonts(|f| f.layout_no_wrap(prefix.to_string(), af2.clone(), dim).size().x);
+                let ag = one_line(&artist, af2.clone(), dim, (avail - pw).max(10.0));
+                let ay = artist_cy - ag.size().y * 0.5;
+                painter.text(egui::pos2(tx, artist_cy), egui::Align2::LEFT_CENTER, prefix, af2.clone(), dim);
+                painter.galley(egui::pos2(tx + pw, ay), ag, dim);
+            }
         }
 
         // 进度条 + 时间（滑块式）
@@ -2377,13 +3321,14 @@ impl IslandApp {
         }
 
         // ---------- 歌词区（可上下拖动浏览；松手后自动回到当前进度） ----------
-        let cur = self.cur_lyric_idx();
+        let instrumental = lyrics::is_instrumental(&self.lyr_lines);
+        let cur = if instrumental { None } else { self.cur_lyric_idx() };
         let lfont = 14.0f32;
         let line_font = egui::FontId::proportional(lfont);
         let row_h = 22.0f32;
         let vtop = rect.top() + CONTENT_PAD_T + 146.0 - 10.0;
         let vbot = rect.bottom() - CONTENT_PAD_B - 10.0;
-        // 歌词与「圆盘+信息」共用同一条视觉中线：左边也去掉圆盘方框的透明留白。
+        // 不依赖上一帧可能滞后的窗口原点，保证能精确贴到最?最右角?
         let lx0 = cx0 - disc_pad;
         let lyric_rect = egui::Rect::from_min_max(egui::pos2(lx0, vtop), egui::pos2(cx1, vbot));
         let view_h = (vbot - vtop).max(row_h);
@@ -2472,14 +3417,20 @@ impl IslandApp {
                     let fill = if self.cfg.char_green { green } else { gdim };
                     let gdim = self.fade_lyric_color(gdim, y, y + row_h, lyric_rect);
                     let fill = self.fade_lyric_color(fill, y, y + row_h, lyric_rect);
-                    self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), gdim, fill, pr, lt);
+                    self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), gdim, fill, pr, lt, false);
                 } else {
                     let fc = self.fade_lyric_color(faint, y, y + row_h, lyric_rect);
-                    self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), fc, fc, 0.0, t);
+                    self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), fc, fc, 0.0, t, false);
                 }
             }
         } else {
-            let hint = if self.lyr_done { "暂无歌词" } else { "歌词加载中…" };
+            let hint = if instrumental {
+                lyrics::INSTRUMENTAL_TEXT
+            } else if self.lyr_done {
+                "暂无歌词"
+            } else {
+                "歌词加载中…"
+            };
             painter.text(egui::pos2((lx0 + cx1) * 0.5, center_y), egui::Align2::CENTER_CENTER, hint, egui::FontId::proportional(13.0), egui::Color32::from_rgba_unmultiplied(120, 196, 160, a));
         }
     }
@@ -2495,12 +3446,14 @@ impl IslandApp {
         // ---- 左侧菜单栏背景（弱化：只比岛体略深的柔和底色，去掉硬分割线）----
         let rail = egui::Rect::from_min_max(pill.left_top(), egui::pos2(pill.left() + rail_w, pill.bottom()));
         let rail_bg = egui::Color32::from_rgba_unmultiplied(22, 23, 28, a);
-        // 左边缘两角跟随岛体本身圆角（顶部贴边为直角、底部为圆角），右侧保持平直，
-        // 避免菜单底色与岛体之间出现明显“色块断层”。
-        let rail_r = self.cfg.radius.min(pill.height() * 0.5) as u8;
+        // 左侧菜单栏的左边缘两角必须跟随岛体当前停靠方向的实际圆角：
+        // TopCenter 左上=直角/左下=圆角，LeftCenter 左侧贴边=直角，RightCenter 左侧为内侧=圆角。
+        // 之前写死 nw:0 会在右吸附展开时把本该圆润的左上角画成直角。
+        let rr_pill = self.cfg.radius.min(pill.height() * 0.5).min(pill.width() * 0.5);
+        let cr = self.cfg.position.corner_radius(rr_pill);
         painter.rect_filled(
             rail,
-            egui::CornerRadius { nw: 0, ne: 0, sw: rail_r, se: 0 },
+            egui::CornerRadius { nw: cr.nw, ne: 0, sw: cr.sw, se: 0 },
             rail_bg,
         );
 
@@ -2531,9 +3484,11 @@ impl IslandApp {
             self.rail_from + (active as f32 - self.rail_from) * ease
         } else { active as f32 };
 
-        let eff_shown = if self.show_settings { -2.0 } else { shown_idx };
+        // 搜索页从天气页打开时，左栏仍应高亮“天气”，而不是底部的“设置”。
+        let settings_active = self.show_settings && !(self.w_city_search && self.w_city_search_from_weather);
+        let eff_shown = if settings_active { -2.0 } else { shown_idx };
         // 顶部两个模块的选中高亮（停留在设置页时不显示）
-        if !self.show_settings {
+        if !settings_active {
             let hl_y = top_y + shown_idx * item_h;
             let hl_rect = egui::Rect::from_min_size(egui::pos2(pill.left() + 9.0, hl_y), egui::vec2(rail_w - 18.0, item_h - 8.0));
             painter.rect_filled(hl_rect, 10.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, (a as f32 * 0.14) as u8));
@@ -2550,6 +3505,10 @@ impl IslandApp {
             let resp = ui.interact(item, ui.id().with(("rail", idx)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
             if resp.clicked() {
                 self.show_settings = false;
+                self.w_city_search = false;
+                self.w_city_search_from_weather = false;
+                self.w_search_need_focus = false;
+                self.w_search_focus_tries = 0;
                 let ni = match idx { 0 => Module::Music, _ => Module::Weather };
                 if ni != self.active {
                     self.rail_from = match self.active { Module::Music => 0.0, _ => 1.0 };
@@ -2562,26 +3521,36 @@ impl IslandApp {
         }
         if rail_anim_done { self.rail_anim_at = None; }
 
-        // 底部「设置」入口（所有模块的公共设置都在这里）
+        // 底部「设置」入口（所有模块的公共设置都在这里�?
         {
             let set_y = pill.bottom() - item_h;
             let item = egui::Rect::from_min_size(egui::pos2(pill.left() + 9.0, set_y), egui::vec2(rail_w - 18.0, item_h - 8.0));
-            if self.show_settings {
+            if settings_active {
                 painter.rect_filled(item, 10.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, (a as f32 * 0.14) as u8));
             }
-            let icol = if self.show_settings { accent } else { muted };
+            let icol = if settings_active { accent } else { muted };
             let cx = item.center().x;
             painter.text(egui::pos2(cx, set_y + 13.0), egui::Align2::CENTER_CENTER, "\u{E713}", icon_font(17.0), icol);
             painter.text(egui::pos2(cx, set_y + 31.5), egui::Align2::CENTER_CENTER, "设置", egui::FontId::proportional(10.5), icol);
             let resp = ui.interact(item, ui.id().with("rail_settings"), egui::Sense::click())
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
-            if resp.clicked() && !self.show_settings {
-                self.settings_scroll = 0.0;
-                self.settings_scroll_target = 0.0;
-                self.show_settings = true;
-                self.mark_upd_seen_rail();
-                if self.upd_ver.is_none() && !self.upd_checking {
-                    self.start_update_check();
+            if resp.clicked() {
+                // 从搜索页点“设置”：先关闭搜索遮罩，露出设置页。
+                if self.w_city_search {
+                    self.w_city_search = false;
+                    self.w_city_search_from_weather = false;
+                    self.w_search_need_focus = false;
+                    self.w_search_focus_tries = 0;
+                }
+                if !self.show_settings {
+                    self.settings_scroll = 0.0;
+                    self.settings_scroll_target = 0.0;
+                    self.settings_scroll_act = std::time::Instant::now() - std::time::Duration::from_secs(10);
+                    self.show_settings = true;
+                    self.mark_upd_seen_rail();
+                    if self.upd_ver.is_none() && !self.upd_checking {
+                        self.start_update_check();
+                    }
                 }
             }
             // 有新版本：设置菜单右上角一个圆点角标，提示里面有更新（看过一次后不再出现）
@@ -2601,7 +3570,7 @@ impl IslandApp {
             (1.0f32, 0.0f32)
         };
 
-        // ---- 右侧内容区 ----
+        // ---- 右侧内容�?----
         let content = egui::Rect::from_min_max(
             egui::pos2(pill.left() + rail_w, pill.top()),
             egui::pos2(pill.right(), pill.bottom()),
@@ -2630,12 +3599,12 @@ impl IslandApp {
                     }
                 }
                 Module::Schedule => self.draw_placeholder_page(&cclip, cslide, e, "日程", "日程模块即将上线"),
-                Module::Weather => self.draw_placeholder_page(&cclip, cslide, e, "天气", "天气模块即将上线"),
+                Module::Weather => self.draw_weather_page(ui, &cclip, cslide, e),
             }
         }
         if self.show_settings || svis > 0.001 {
             self.draw_settings_page(ui, painter, content, e, svis);
-        }        // 模块切换过渡：用岛体底色做淡入遮罩，让新页面“浮现”
+        }        // 模块切换过渡：用岛体底色做淡入遮罩，让新页面“浮现�?
         if switch_p < 0.999 {
             let ma = ((1.0 - switch_p).powf(1.5) * self.cfg.alpha as f32) as u8;
             let mask = egui::Color32::from_rgba_unmultiplied(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2], ma);
@@ -2655,6 +3624,400 @@ impl IslandApp {
         painter.text(egui::pos2(content.center().x, content.center().y + 18.0), egui::Align2::CENTER_CENTER, "敬请期待", egui::FontId::proportional(11.0), muted2);
     }
 
+    /// 天气页：城市�?+ 刷新、hero（动态图�?大温�?最高最�?AQI）、未�?7 天温度区间条、详情�?
+    /// 数据全部来自 `self.w_data`（无 key，itboy 主源 + 本地缓存兜底）�?
+    fn draw_weather_page(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, rect: egui::Rect, e: f32) {
+        let a = (((e - 0.5) * 2.0) * 255.0).clamp(0.0, 255.0) as u8;
+        let ink = egui::Color32::from_rgba_unmultiplied(233, 236, 242, a);
+        let muted = egui::Color32::from_rgba_unmultiplied(150, 158, 175, a);
+        let muted2 = egui::Color32::from_rgba_unmultiplied(107, 113, 128, a);
+        let accent = egui::Color32::from_rgba_unmultiplied(52, 211, 153, a);
+        let bg_col = egui::Color32::from_rgba_unmultiplied(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2], 255);
+
+        let x0 = rect.left() + CONTENT_PAD_X;
+        let x1 = rect.right() - CONTENT_PAD_X;
+        let y0 = rect.top() + CONTENT_PAD_T;
+
+        // 城市标题（固定显示当前位置，不提供搜索/切换入口）
+        let city = match &self.w_data {
+            Some(w) if !w.city.is_empty() => w.city.clone(),
+            _ => {
+                if !self.cfg.weather_city_name.is_empty() {
+                    self.cfg.weather_city_name.clone()
+                } else if self.cfg.weather_city.is_empty() {
+                    "定位中…".to_string()
+                } else {
+                    "天气".to_string()
+                }
+            }
+        };
+        painter.text(egui::pos2(x0, y0 + 8.0), egui::Align2::LEFT_CENTER, &city, bold_font(16.0), ink);
+
+        // 更新时间 + 刷新按钮（右侧）
+        let refresh_hit = egui::Rect::from_min_max(egui::pos2(x1 - 80.0, y0 - 3.0), egui::pos2(x1, y0 + 21.0));
+        let refresh_resp = ui
+            .interact(refresh_hit, ui.id().with("w_refresh"), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if let Some(w) = &self.w_data {
+            let local = if self.w_fetch_label.is_empty() { "—" } else { self.w_fetch_label.as_str() };
+            let src = if w.updated.is_empty() { "—" } else { w.updated.as_str() };
+            refresh_resp
+                .clone()
+                .on_hover_text(format!("本地拉取 {}｜数据源更新 {}", local, src));
+        }
+        {
+            let upd = self.w_data.as_ref().map(|w| w.updated.clone()).unwrap_or_default();
+            let notice_on = self.w_notice_until.map(|t| t > Instant::now()).unwrap_or(false);
+            if self.w_inflight {
+                painter.text(
+                    egui::pos2(x1 - 24.0, y0 + 8.0),
+                    egui::Align2::RIGHT_CENTER,
+                    "更新中…",
+                    egui::FontId::proportional(10.5),
+                    accent,
+                );
+            } else if notice_on {
+                let col = if self.w_notice_err {
+                    egui::Color32::from_rgba_unmultiplied(242, 110, 92, a)
+                } else {
+                    accent
+                };
+                painter.text(
+                    egui::pos2(x1 - 24.0, y0 + 8.0),
+                    egui::Align2::RIGHT_CENTER,
+                    &self.w_notice,
+                    egui::FontId::proportional(10.5),
+                    col,
+                );
+                if self.w_notice_err {
+                    if let Some(err) = self.w_err.clone() {
+                        refresh_resp.clone().on_hover_text(err);
+                    }
+                }
+            } else {
+                // 迷你?
+                // 迷你?
+                let label = if !self.w_fetch_label.is_empty() {
+                    self.w_fetch_label.clone()
+                } else {
+                    upd.clone()
+                };
+                if !label.is_empty() {
+                    let text = if self.w_fetch_label == "缓存" {
+                        "缓存数据".to_string()
+                    } else {
+                        format!("{} 更新", label)
+                    };
+                    painter.text(
+                        egui::pos2(x1 - 24.0, y0 + 8.0),
+                        egui::Align2::RIGHT_CENTER,
+                        text,
+                        egui::FontId::proportional(10.5),
+                        muted2,
+                    );
+                }
+            }
+            if self.w_inflight {
+                // 迷你?
+                let c = egui::pos2(x1 - 6.0, y0 + 8.0);
+                let r = 5.5;
+                let spin_t = ui.input(|i| i.time) as f32;
+                let start = spin_t * 5.0;
+                let steps = 16;
+                let pts: Vec<egui::Pos2> = (0..=steps)
+                    .map(|i| {
+                        let ang = start + (i as f32 / steps as f32) * std::f32::consts::TAU * 0.72;
+                        egui::pos2(c.x + ang.cos() * r, c.y + ang.sin() * r)
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.6, accent)));
+            } else {
+                painter.text(
+                    egui::pos2(x1 - 4.0, y0 + 8.0),
+                    egui::Align2::RIGHT_CENTER,
+                    "\u{21bb}",
+                    egui::FontId::proportional(14.0),
+                    muted,
+                );
+            }
+        }
+
+        // 无数据：加载�?/ 失败提示
+        let Some(w) = self.w_data.clone() else {
+            let title = if self.w_err.is_some() { "天气加载失败" } else { "天气加载中…" };
+            painter.text(
+                egui::pos2(rect.center().x, rect.center().y - 8.0),
+                egui::Align2::CENTER_CENTER,
+                title,
+                egui::FontId::proportional(13.0),
+                muted,
+            );
+            if let Some(err) = &self.w_err {
+                let g = ui.fonts(|f| {
+                    f.layout(err.clone(), egui::FontId::proportional(10.5), muted2, (x1 - x0).max(120.0))
+                });
+                let eh = g.size().y;
+                painter.galley(
+                    egui::pos2(rect.center().x - g.size().x * 0.5, rect.center().y + 10.0),
+                    g,
+                    muted2,
+                );
+                painter.text(
+                    egui::pos2(rect.center().x, rect.center().y + 14.0 + eh),
+                    egui::Align2::CENTER_CENTER,
+                    "点击右上角 ↻ 重试",
+                    egui::FontId::proportional(10.0),
+                    muted2,
+                );
+            }
+            if refresh_resp.clicked() {
+                self.start_weather_fetch();
+            }
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+            return;
+        };
+
+        let f = self.cfg.weather_unit == 1;
+        let unit = weather::temp_unit(f);
+        let temp = weather::conv_temp(w.temp, f);
+        let (hi, lo) = w.today_high_low();
+        let st = platform::local_time();
+        let is_night = st.wHour >= 18 || st.wHour < 6;
+        let sky = weather::sky_of(&w.today_type, is_night);
+        let now_t = ui.input(|i| i.time);
+
+        // ---- Hero（紧凑版：图�?温度不再过大�?---
+        let hero_top = y0 + 26.0;
+        draw_weather_icon(painter, sky, egui::pos2(x0 + 26.0, hero_top + 22.0), 46.0, a, now_t, bg_col);
+        painter.text(egui::pos2(x0 + 58.0, hero_top + 12.0), egui::Align2::LEFT_CENTER, format!("{:.0}{}", temp, unit), bold_font(30.0), ink);
+        painter.text(egui::pos2(x0 + 60.0, hero_top + 34.0), egui::Align2::LEFT_CENTER, &w.today_type, egui::FontId::proportional(12.5), muted);
+        painter.text(
+            egui::pos2(x0 + 60.0, hero_top + 51.0),
+            egui::Align2::LEFT_CENTER,
+            format!("最高 {:.0}°  最低 {:.0}°", weather::conv_temp(hi as f32, f), weather::conv_temp(lo as f32, f)),
+            egui::FontId::proportional(11.0),
+            muted2,
+        );
+        // AQI / 湿度（右上信息块�?
+        {
+            let q = if w.quality.is_empty() { "—".to_string() } else { w.quality.clone() };
+            painter.text(egui::pos2(x1, hero_top - 2.0), egui::Align2::RIGHT_TOP, "空气质量", egui::FontId::proportional(9.5), muted2);
+            painter.text(egui::pos2(x1, hero_top + 11.0), egui::Align2::RIGHT_TOP, &q, bold_font(14.0), aqi_color(&w.quality, a));
+            let pm = if w.pm25 > 0.0 { format!("PM2.5 {:.0}", w.pm25) } else { "PM2.5 —".to_string() };
+            painter.text(egui::pos2(x1, hero_top + 30.0), egui::Align2::RIGHT_TOP, pm, egui::FontId::proportional(10.0), muted2);
+            let hum = if w.humidity.is_empty() { "—".to_string() } else { w.humidity.clone() };
+            painter.text(egui::pos2(x1, hero_top + 44.0), egui::Align2::RIGHT_TOP, format!("湿度 {}", hum), egui::FontId::proportional(10.0), muted2);
+        }
+
+        // 分隔�?
+        let div_y = hero_top + 63.0;
+        painter.line_segment([egui::pos2(x0, div_y), egui::pos2(x1, div_y)], egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (a as f32 * 0.06) as u8)));
+
+        // ---- 可滚动区�? 天列�?+ 详情�?---
+        let list_top = div_y + 8.0;
+        let list_bottom = rect.bottom() - CONTENT_PAD_B;
+        let view_h = (list_bottom - list_top).max(1.0);
+        let days = &w.days;
+        let nshow = days.len().min(7);
+        let row_h = 24.0f32;
+        let title_h = 15.0f32;
+        let days_h = title_h + nshow as f32 * row_h;
+        let hourly_h = if w.hours.is_empty() { 0.0 } else { 62.0 };
+        // 感冒提示按宽度自动换行，先量出高度，保证滚动区把整段文字算进去（不会被底部裁掉）
+        let ganmao_galley = if w.ganmao.trim().is_empty() {
+            None
+        } else {
+            Some(ui.fonts(|fnt| {
+                fnt.layout(w.ganmao.clone(), egui::FontId::proportional(11.0), muted, (x1 - x0).max(1.0))
+            }))
+        };
+        let ganmao_h = ganmao_galley.as_ref().map(|g| g.size().y).unwrap_or(0.0);
+        let detail_h = 80.0 + ganmao_h + 4.0;
+        let total_h = hourly_h + days_h + 8.0 + detail_h;
+        let max_scroll = (total_h - view_h).max(0.0);
+        let mut w_scroll_activity = false;
+        // 调试：WINISLE_W_SCROLL=<px> 直接把天气页滚到该偏移（用于验证“滚动时滚动条出现”）
+        if let Ok(v) = std::env::var("WINISLE_W_SCROLL") {
+            if let Ok(px) = v.parse::<f32>() {
+                self.w_scroll_target = px;
+                self.w_scroll = px;
+                self.w_scroll_act = std::time::Instant::now();
+                w_scroll_activity = true;
+            }
+        }
+        // 调试：WINISLE_W_SCROLL_ONCE 仅在首帧注入一次滚动，之后停止（用于验证“停止后自动淡出”）
+        if std::env::var("WINISLE_W_SCROLL_ONCE").is_ok() {
+            static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                self.w_scroll_target = 90.0;
+                self.w_scroll = 90.0;
+                self.w_scroll_act = std::time::Instant::now();
+                w_scroll_activity = true;
+            }
+        }
+        if let Some(ph) = ui.ctx().pointer_hover_pos() {
+            if rect.contains(ph) && max_scroll > 0.0 {
+                let d = ui.input(|i| i.raw_scroll_delta.y);
+                if d.abs() > 0.01 {
+                    self.w_scroll_target -= d;
+                    w_scroll_activity = true;
+                }
+            }
+        }
+        self.w_scroll_target = self.w_scroll_target.clamp(0.0, max_scroll);
+        let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.05);
+        let k = 1.0 - (-dt / 0.07).exp();
+        self.w_scroll += (self.w_scroll_target - self.w_scroll) * k;
+        self.w_scroll = self.w_scroll.clamp(0.0, max_scroll);
+        let w_settling = (self.w_scroll_target - self.w_scroll).abs() > 0.5;
+        if (self.w_scroll_target - self.w_scroll).abs() > 0.25 {
+            ui.ctx().request_repaint();
+        }
+        // 滚动条自动隐藏：仅在滚动 / 惯性收敛中 / 停止后 1.2 秒内显示，随后淡出
+        if w_scroll_activity {
+            self.w_scroll_act = std::time::Instant::now();
+        }
+        let w_since = self.w_scroll_act.elapsed().as_secs_f32();
+        let w_want_vis = if max_scroll > 0.0 && (w_scroll_activity || w_settling || w_since < 1.2) {
+            1.0
+        } else {
+            0.0
+        };
+        let wkv = 1.0 - (-dt / 0.12).exp();
+        self.w_scroll_vis += (w_want_vis - self.w_scroll_vis) * wkv;
+        if self.w_scroll_vis < 0.005 {
+            self.w_scroll_vis = 0.0;
+        } else if self.w_scroll_vis > 0.995 {
+            self.w_scroll_vis = 1.0;
+        }
+        if (self.w_scroll_vis - w_want_vis).abs() > 0.005 {
+            ui.ctx().request_repaint();
+        }
+        if std::env::var("WINISLE_WDBG").is_ok() {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("D:\\LingDao\\_wdebug.txt") {
+                let _ = writeln!(f, "max={:.1} scroll={:.1} clamp={} want={:.0} vis={:.3} rect=({:.0},{:.0},{:.0},{:.0})", max_scroll, self.w_scroll, self.w_scroll_target, w_want_vis, self.w_scroll_vis, rect.left(), rect.top(), rect.right(), rect.bottom());
+            }
+        }
+        let list_rect = egui::Rect::from_min_max(egui::pos2(rect.left(), list_top), egui::pos2(rect.right(), list_bottom));
+        let lp = painter.with_clip_rect(list_rect);
+        let p: &egui::Painter = &lp;
+        let top = list_top - self.w_scroll;
+
+        // ---- 未来 24 小时�? 小时间隔，来�?7timer�?---
+        if !w.hours.is_empty() {
+            p.text(egui::pos2(x0, top + 6.0), egui::Align2::LEFT_CENTER, "未来 24 小时", egui::FontId::proportional(11.0), muted2);
+            let hn = w.hours.len().min(8);
+            let cw = (x1 - x0) / hn as f32;
+            for (i, h) in w.hours.iter().take(hn).enumerate() {
+                let cx = x0 + cw * (i as f32 + 0.5);
+                p.text(egui::pos2(cx, top + 24.0), egui::Align2::CENTER_CENTER, &h.label, egui::FontId::proportional(9.5), muted2);
+                draw_weather_icon(p, h.sky, egui::pos2(cx, top + 38.0), 14.0, a, now_t, bg_col);
+                p.text(egui::pos2(cx, top + 51.0), egui::Align2::CENTER_CENTER, format!("{:.0}°", weather::conv_temp(h.temp as f32, f)), egui::FontId::proportional(10.5), ink);
+            }
+        }
+        let base = top + hourly_h;
+
+        p.text(egui::pos2(x0, base + 6.0), egui::Align2::LEFT_CENTER, format!("未来 {} 天", w.days.len()), egui::FontId::proportional(11.0), muted2);
+
+        // 温度区间归一�?
+        let mut mn = i32::MAX;
+        let mut mx = i32::MIN;
+        for d in days.iter().take(nshow) {
+            mn = mn.min(d.low);
+            mx = mx.max(d.high);
+        }
+        if nshow == 0 {
+            mn = 0;
+            mx = 1;
+        }
+        let span = (mx - mn).max(1) as f32;
+        let bar_x0 = x0 + 150.0;
+        let bar_x1 = x1 - 96.0;
+        for (i, d) in days.iter().take(nshow).enumerate() {
+            let ry = base + title_h + i as f32 * row_h + row_h * 0.5;
+            if ry < list_top - row_h || ry > list_bottom + row_h {
+                continue;
+            }
+            let label = if i == 0 { "今天".to_string() } else { d.week.replace("星期", "周") };
+            p.text(egui::pos2(x0, ry), egui::Align2::LEFT_CENTER, &label, egui::FontId::proportional(12.0), if i == 0 { ink } else { muted });
+            let mmdd = if d.date.len() >= 10 { d.date[5..].replace('-', "/") } else { d.date.clone() };
+            p.text(egui::pos2(x0 + 34.0, ry), egui::Align2::LEFT_CENTER, &mmdd, egui::FontId::proportional(9.5), muted2);
+            draw_weather_icon(p, weather::sky_of(&d.day_type, false), egui::pos2(x0 + 94.0, ry), 18.0, a, now_t, bg_col);
+            p.text(egui::pos2(x0 + 112.0, ry), egui::Align2::LEFT_CENTER, &d.day_type, egui::FontId::proportional(11.0), muted);
+            // 区间�?
+            p.line_segment([egui::pos2(bar_x0, ry), egui::pos2(bar_x1, ry)], egui::Stroke::new(3.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (a as f32 * 0.08) as u8)));
+            let t_low = (d.low - mn) as f32 / span;
+            let t_high = (d.high - mn) as f32 / span;
+            let sx = bar_x0 + (bar_x1 - bar_x0) * t_low;
+            let ex = bar_x0 + (bar_x1 - bar_x0) * t_high;
+            p.line_segment([egui::pos2(sx, ry), egui::pos2(ex, ry)], egui::Stroke::new(3.0, accent));
+            p.text(
+                egui::pos2(x1, ry),
+                egui::Align2::RIGHT_CENTER,
+                format!("{:.0}° / {:.0}°", weather::conv_temp(d.high as f32, f), weather::conv_temp(d.low as f32, f)),
+                egui::FontId::proportional(11.5),
+                ink,
+            );
+        }
+
+        // ---- 详情 ----
+        let dy = base + days_h + 8.0;
+        let wind = w.today().map(|d| format!("{} {}", d.wind_dir, d.wind_level)).unwrap_or_default();
+        let sun = w.today().map(|d| format!("{} / {}", d.sunrise, d.sunset)).unwrap_or_default();
+        let items = [
+            ("风向风力", wind.as_str()),
+            ("日出 / 日落", sun.as_str()),
+            ("空气质量", if w.quality.is_empty() { "—" } else { w.quality.as_str() }),
+            ("PM2.5", ""),
+        ];
+        // 详情分两列。排版遵循“就近成组”：标题与其数值贴近（组内 ~14pt），
+        // 而上一组数值与下一组标题之间留更大间距（组�?~20pt），整体节奏协调、不忽远忽近�?
+        let col_w = (x1 - x0) / 2.0;
+        for (idx, (k2, v2)) in items.iter().enumerate() {
+            let cx = x0 + (idx % 2) as f32 * col_w;
+            let cy = dy + (idx / 2) as f32 * 34.0;
+            p.text(egui::pos2(cx, cy + 4.0), egui::Align2::LEFT_CENTER, *k2, egui::FontId::proportional(10.0), muted2);
+            let disp = if *k2 == "PM2.5" {
+                if w.pm25 > 0.0 { format!("{:.0}", w.pm25) } else { "—".to_string() }
+            } else {
+                v2.to_string()
+            };
+            p.text(egui::pos2(cx, cy + 18.0), egui::Align2::LEFT_CENTER, disp, egui::FontId::proportional(12.0), ink);
+        }
+        // 感冒提示：作为独立一组，标题与正文贴近（组内 ~14pt），与上方内容留出组间间�?
+        let gy = dy + 72.0;
+        p.text(egui::pos2(x0, gy), egui::Align2::LEFT_CENTER, "感冒提示", egui::FontId::proportional(10.0), muted2);
+        if let Some(g) = &ganmao_galley {
+            p.galley(egui::pos2(x0, gy + 8.0), g.clone(), muted);
+        }
+
+        // 数据来源 / 缓存提示
+        if w.from_cache {
+            p.text(egui::pos2(x1, list_bottom - 2.0), egui::Align2::RIGHT_BOTTOM, "离线数据", egui::FontId::proportional(9.0), muted2);
+        }
+
+        // 滚动条（滚动时才淡入，停止约 1.2 秒后自动淡出；细 2px 样式）
+        if max_scroll > 4.0 && self.w_scroll_vis > 0.01 {
+            let sv = self.w_scroll_vis;
+            let tx = rect.right() - 4.0;
+            let track = egui::Rect::from_min_max(egui::pos2(tx, list_top + 2.0), egui::pos2(tx + 2.0, list_bottom - 2.0));
+            painter.rect_filled(track, 1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (12.0 * sv) as u8));
+            let th = ((view_h / total_h.max(1.0)) * track.height()).max(14.0);
+            let range = (track.height() - th).max(1.0);
+            let tp = (self.w_scroll / max_scroll.max(1.0)) * range;
+            let thumb = egui::Rect::from_min_size(egui::pos2(tx, track.top() + tp), egui::vec2(2.0, th));
+            painter.rect_filled(thumb, 1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (60.0 * sv) as u8));
+        }
+
+        // 刷新点击热区
+        if refresh_resp.clicked() {
+            self.start_weather_fetch();
+        }
+        // 图标为程序化动画，按需重绘
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+    }
+
     /// 右下角齿轮按钮（现已改为左侧菜单底部「设置」入口，保留备用）。
     #[allow(dead_code)]
     fn draw_gear(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, content: egui::Rect, e: f32, vis: f32) {
@@ -2666,7 +4029,7 @@ impl IslandApp {
         // 与返回按钮一致：无底色、无描边，只留齿轮图标，悬停不高亮
         let col = egui::Color32::from_rgba_unmultiplied(170, 178, 195, a);
         painter.text(c, egui::Align2::CENTER_CENTER, "\u{E713}", icon_font(15.0), col); // Settings 齿轮
-        if vis > 0.5 && resp.clicked() { self.settings_scroll = 0.0; self.settings_scroll_target = 0.0; self.show_settings = true; self.mark_upd_seen_rail(); }
+        if vis > 0.5 && resp.clicked() { self.settings_scroll = 0.0; self.settings_scroll_target = 0.0; self.settings_scroll_act = std::time::Instant::now() - std::time::Duration::from_secs(10); self.show_settings = true; self.mark_upd_seen_rail(); }
     }
 
     /// 后台检查更新（不阻塞 UI）。
@@ -2704,9 +4067,9 @@ impl IslandApp {
         let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
         std::thread::spawn(move || {
             let r = update::download_setup_with_progress(&m, pct.clone()).and_then(|p| {
-                // 先让「正在安装」状态有机会绘制，再拉起静默安装器
+                // 迷你?
                 std::thread::sleep(Duration::from_millis(700));
-                // 标记今天已检查，重启后的新版界面直接显示「已是最新版本」
+                // 迷你?
                 let mut cfg = Config::load();
                 cfg.upd_checked_day = update::today_local();
                 cfg.save();
@@ -2731,7 +4094,7 @@ impl IslandApp {
                 Ok(Some(m)) => {
                     self.upd_msg = format!("发现新版本 v{}", m.version);
                     self.upd_ver = Some(m);
-                    // 如果此刻已经在设置页里，视为“设置已看过”，收起态/设置角标不再出现
+                    // 如果此刻已经在设置页里，视为“设置已看过”，收起�?设置角标不再出现
                     if self.show_settings {
                         self.mark_upd_seen_rail();
                     }
@@ -2766,12 +4129,464 @@ impl IslandApp {
             self.start_update_check();
         }
     }
+    /// 启动一次天气后台拉取（非阻塞，不卡 UI）�?
+    fn start_weather_fetch(&mut self) {
+        if self.w_inflight {
+            return;
+        }
+        self.w_inflight = true;
+        self.w_err = None;
+        self.w_notice_until = None;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // 固定跟随当前位置：每次拉取前都重新定位，失败兜底北京
+            let real = weather::locate()
+                .map(|(_, k)| k)
+                .unwrap_or_else(|| "101010100".to_string());
+            let _ = tx.send(weather::fetch(&real));
+        });
+        self.w_rx = Some(rx);
+    }
+
+    /// 每帧轮询天气拉取结果，并按节流自动刷新（成功 30 分钟一次，失败 60 秒重试）�?
+    fn poll_weather(&mut self) {
+        if let Some(rx) = self.w_rx.as_ref() {
+            if let Ok(r) = rx.try_recv() {
+                self.w_rx = None;
+                self.w_inflight = false;
+                self.w_last_fetch = Instant::now();
+                match r {
+                    Ok(w) => {
+                        // 天气固定跟随当前位置，始终采纳最近一次定位结果
+                        {
+                            let mut w = w;
+                            if w.city.is_empty() {
+                                w.city = if !self.cfg.weather_city_name.is_empty() {
+                                    self.cfg.weather_city_name.clone()
+                                } else {
+                                    "当前位置".to_string()
+                                };
+                            }
+                            self.w_data = Some(w);
+                            self.w_err = None;
+                            let lt = platform::local_time();
+                            self.w_fetch_label = format!("{:02}:{:02}", lt.wHour, lt.wMinute);
+                            self.w_notice = "✓ 已更新".to_string();
+                            self.w_notice_err = false;
+                            self.w_notice_until = Some(Instant::now() + Duration::from_secs(4));
+                        }
+                    }
+                    Err(e) => {
+                        self.w_err = Some(e);
+                        self.w_notice = "更新失败".to_string();
+                        self.w_notice_err = true;
+                        self.w_notice_until = Some(Instant::now() + Duration::from_secs(6));
+                        if self.w_data.is_none() {
+                            self.w_data = weather::load_cache(&self.cfg.weather_city);
+                            if self.w_data.is_some() {
+                                self.w_fetch_label = "缓存".to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let due = if self.w_err.is_some() {
+            Duration::from_secs(60)
+        } else {
+            Duration::from_secs(1800)
+        };
+        if self.w_rx.is_none() && !self.w_inflight && self.w_last_fetch.elapsed() > due {
+            self.start_weather_fetch();
+        }
+    }
+
+    /// 切换城市：换 key / 名称、落盘、清空旧数据并立即触发拉取。key 为空=自动定位�?
+    fn set_weather_city(&mut self, key: &str, name: &str) {
+        if self.cfg.weather_city == key && self.cfg.weather_city_name == name {
+            return;
+        }
+        self.cfg.weather_city = key.to_string();
+        self.cfg.weather_city_name = name.to_string();
+        self.cfg.save();
+        self.w_data = weather::load_cache(key);
+        self.w_fetch_label = if self.w_data.is_some() { "缓存".to_string() } else { String::new() };
+        self.w_err = None;
+        self.w_scroll = 0.0;
+        self.w_scroll_target = 0.0;
+        self.w_last_fetch = Instant::now() - Duration::from_secs(3600);
+        self.start_weather_fetch();
+    }
+
+    /// 城市搜索：起后台线程拉取候选（防抖�?poll_city_search 控制）�?
+    fn start_city_search(&mut self) {
+        let q = self.w_search_query.trim().to_string();
+        if q.is_empty() {
+            return;
+        }
+        self.w_search_inflight = true;
+        self.w_search_last_query = q.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(weather::search_cities(&q));
+        });
+        self.w_search_rx = Some(rx);
+    }
+
+    /// 每帧轮询搜索结果；输入停顿约 320ms 后自动发起查询�?
+    fn poll_city_search(&mut self) {
+        if let Some(rx) = self.w_search_rx.as_ref() {
+            if let Ok(list) = rx.try_recv() {
+                self.w_search_rx = None;
+                self.w_search_inflight = false;
+                self.w_search_results = list;
+                self.w_search_results_at = Some(Instant::now());
+                // 仅调试：用 WINISLE_SEARCH_PICK=城市名或代码 直接选中结果，避免真实鼠标点击。
+                if let Ok(pick) = std::env::var("WINISLE_SEARCH_PICK") {
+                    if let Some(hit) = self
+                        .w_search_results
+                        .iter()
+                        .find(|h| h.key == pick || h.name == pick)
+                        .cloned()
+                    {
+                        self.set_weather_city(&hit.key, &hit.name);
+                        self.close_city_search();
+                        self.w_search_results.clear();
+                    }
+                }
+            }
+        }
+        if !self.w_city_search {
+            return;
+        }
+        let q = self.w_search_query.trim().to_string();
+        if q.is_empty() {
+            return;
+        }
+        if !self.w_search_inflight
+            && q != self.w_search_last_query
+            && self.w_search_last_edit.elapsed() >= Duration::from_millis(320)
+        {
+            self.start_city_search();
+        }
+    }
+    /// 打开城市搜索页：记录来源，返回时才知道该回天气页还是设置页�?
+    fn open_city_search(&mut self, from_weather: bool) {
+        self.show_settings = true;
+        self.w_city_search = true;
+        self.w_city_search_from_weather = from_weather;
+        self.w_search_need_focus = true;
+        self.w_search_focus_tries = 5;
+        self.w_search_query.clear();
+        self.w_search_results.clear();
+        self.w_search_results_at = None;
+        self.w_search_last_query.clear();
+        self.settings_scroll = 0.0;
+        self.settings_scroll_target = 0.0;
+    }
+
+    fn close_city_search(&mut self) {
+        self.w_city_search = false;
+        if self.w_city_search_from_weather {
+            self.show_settings = false;
+        }
+        self.w_city_search_from_weather = false;
+        self.w_search_need_focus = false;
+        self.w_search_focus_tries = 0;
+    }
+
+    /// 城市搜索子页（覆盖设置页内容区）：输入城�?区县，选中即切换；也可恢复自动定位�?
+    fn draw_city_search_page(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, content: egui::Rect, e: f32, vis: f32) {
+        let vis = vis.clamp(0.0, 1.0);
+        let clip = painter.with_clip_rect(content);
+        let painter: &egui::Painter = &clip;
+        let mask = egui::Color32::from_rgba_unmultiplied(
+            self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2], (self.cfg.alpha as f32 * vis) as u8,
+        );
+        let rr = self.cfg.radius.min(content.height() * 0.5);
+        painter.rect_filled(content, rr, mask);
+        let dy = (1.0 - vis) * 18.0;
+        let content = egui::Rect::from_min_max(
+            egui::pos2(content.left(), content.top() + dy),
+            egui::pos2(content.right(), content.bottom() + dy),
+        );
+        let a = ((((e - 0.5) * 2.0) * 255.0).clamp(0.0, 255.0) * vis) as u8;
+        let ink = egui::Color32::from_rgba_unmultiplied(233, 236, 242, a);
+        let muted2 = egui::Color32::from_rgba_unmultiplied(107, 113, 128, a);
+        let accent = egui::Color32::from_rgba_unmultiplied(52, 211, 153, a);
+
+        let x0 = content.left() + CONTENT_PAD_X;
+        let x1 = content.right() - CONTENT_PAD_X;
+        let y0 = content.top() + CONTENT_PAD_T;
+
+        // 返回 + 标题
+        let back = egui::Rect::from_center_size(egui::pos2(x0 + 9.0, y0 + 10.0), egui::vec2(26.0, 26.0));
+        let br = ui
+            .interact(back, ui.id().with("w_city_back"), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let bt = ui
+            .ctx()
+            .animate_bool_with_time(ui.id().with("w_city_back_hover"), br.hovered(), 0.12);
+        painter.text(
+            back.center(),
+            egui::Align2::CENTER_CENTER,
+            "\u{2039}",
+            egui::FontId::proportional(20.0),
+            lerp_color(muted2, accent, bt),
+        );
+        if br.clicked() {
+            self.close_city_search();
+        }
+        painter.text(
+            egui::pos2(x0 + 26.0, y0 + 10.0),
+            egui::Align2::LEFT_CENTER,
+            "搜索城市",
+            bold_font(15.0),
+            ink,
+        );
+
+        // 搜索�?+ 自动定位：用低透明度薄荷色叠在内容区背景上�?
+        // 不引入任何突兀的灰色块，保证与深色内容区融在一起�?
+        let mint = |al: f32| {
+            egui::Color32::from_rgba_unmultiplied(52, 211, 153, (a as f32 * al).clamp(0.0, 255.0) as u8)
+        };
+        let iy = y0 + 30.0;
+        let auto_w = 64.0f32;
+        let input_r = egui::Rect::from_min_max(
+            egui::pos2(x0, iy),
+            egui::pos2(x1 - auto_w - 6.0, iy + 26.0),
+        );
+        painter.rect_filled(input_r, 7.0, egui::Color32::from_rgba_unmultiplied(22, 23, 28, a));
+        painter.rect_stroke(
+            input_r,
+            7.0,
+            egui::Stroke::new(
+                0.8,
+                egui::Color32::from_rgba_unmultiplied(150, 158, 175, (a as f32 * 0.50) as u8),
+            ),
+            egui::StrokeKind::Inside,
+        );
+        let mut q = std::mem::take(&mut self.w_search_query);
+        let te = egui::TextEdit::singleline(&mut q)
+            .frame(false)
+            .id(ui.id().with("w_city_input"))
+            .hint_text("城市 / 区县，如 杭州、浦东新区")
+            .font(egui::FontId::proportional(12.0))
+            .text_color(ink);
+        // TextEdit 默认会铺一�?extreme_bg_color；此处临时改为透明�?
+        // 让上面绘制的薄荷色底透出来，避免出现一块灰色输入框�?
+        let tresp = ui
+            .scope(|ui| {
+                let v = ui.visuals_mut();
+                v.extreme_bg_color = egui::Color32::TRANSPARENT;
+                v.widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
+                v.widgets.hovered.bg_fill = egui::Color32::TRANSPARENT;
+                v.widgets.active.bg_fill = egui::Color32::TRANSPARENT;
+                ui.put(input_r.shrink2(egui::vec2(8.0, 3.0)), te)
+            })
+            .inner;
+        self.w_search_query = q;
+        if self.w_search_need_focus && self.w_search_focus_tries > 0 {
+            if !tresp.has_focus() {
+                tresp.request_focus();
+            }
+            if tresp.has_focus() {
+                self.w_search_need_focus = false;
+            } else {
+                self.w_search_focus_tries = self.w_search_focus_tries.saturating_sub(1);
+            }
+        }
+        let ft = ui
+            .ctx()
+            .animate_bool_with_time(ui.id().with("w_city_input_focus"), tresp.has_focus(), 0.16);
+        painter.rect_stroke(
+            input_r,
+            7.0,
+            egui::Stroke::new(
+                0.8 + 0.2 * ft,
+                egui::Color32::from_rgba_unmultiplied(
+                    150,
+                    158,
+                    175,
+                    (a as f32 * (0.50 + 0.35 * ft)) as u8,
+                ),
+            ),
+            egui::StrokeKind::Inside,
+        );
+        if ft > 0.01 {
+            painter.rect_stroke(
+                input_r.expand(1.0),
+                8.0,
+                egui::Stroke::new(
+                    0.6,
+                    egui::Color32::from_rgba_unmultiplied(
+                        150,
+                        158,
+                        175,
+                        (a as f32 * 0.12 * ft) as u8,
+                    ),
+                ),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if tresp.changed() {
+            self.w_search_last_edit = Instant::now();
+            if self.w_search_query.trim().is_empty() {
+                self.w_search_results.clear();
+                self.w_search_results_at = None;
+                self.w_search_last_query.clear();
+            }
+        }
+        let auto_r = egui::Rect::from_min_max(
+            egui::pos2(x1 - auto_w, iy),
+            egui::pos2(x1, iy + 26.0),
+        );
+        let ar = ui
+            .interact(auto_r, ui.id().with("w_city_auto"), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let at = ui
+            .ctx()
+            .animate_bool_with_time(ui.id().with("w_city_auto_hover"), ar.hovered(), 0.13);
+        painter.rect_filled(
+            auto_r,
+            7.0,
+            lerp_color(
+                accent,
+                egui::Color32::from_rgba_unmultiplied(108, 232, 186, a),
+                at,
+            ),
+        );
+        painter.text(
+            auto_r.center(),
+            egui::Align2::CENTER_CENTER,
+            "自动定位",
+            egui::FontId::proportional(10.0),
+            egui::Color32::from_rgba_unmultiplied(6, 42, 32, a),
+        );
+        if ar.clicked() {
+            self.set_weather_city("", "");
+            self.close_city_search();
+        }
+
+        // 结果列表
+        let mut yy = iy + 34.0;
+        let q = self.w_search_query.trim().to_string();
+        if q.is_empty() {
+            painter.text(
+                egui::pos2(x0 + 2.0, yy + 4.0),
+                egui::Align2::LEFT_TOP,
+                "输入城市或区县名，从全国范围搜索",
+                egui::FontId::proportional(11.0),
+                muted2,
+            );
+        } else if self.w_search_inflight && self.w_search_results.is_empty() {
+            painter.text(
+                egui::pos2(x0 + 2.0, yy + 4.0),
+                egui::Align2::LEFT_TOP,
+                "搜索中…",
+                egui::FontId::proportional(11.0),
+                muted2,
+            );
+        } else if self.w_search_results.is_empty() {
+            painter.text(
+                egui::pos2(x0 + 2.0, yy + 4.0),
+                egui::Align2::LEFT_TOP,
+                format!("未找到「{}」，换个名称试试", q),
+                egui::FontId::proportional(11.0),
+                muted2,
+            );
+        } else {
+            let list = self.w_search_results.clone();
+            let list_age = self
+                .w_search_results_at
+                .map(|t| t.elapsed().as_secs_f32())
+                .unwrap_or(1.0);
+            for (i, hit) in list.iter().take(6).enumerate() {
+                // 结果逐条错峰淡入 + 轻微上移，避免列表突然出�?
+                let raw = ((list_age - i as f32 * 0.028) / 0.16).clamp(0.0, 1.0);
+                let appear = raw * raw * (3.0 - 2.0 * raw);
+                if appear <= 0.001 {
+                    continue;
+                }
+                let row_top = yy + (1.0 - appear) * 5.0;
+                let row = egui::Rect::from_min_size(egui::pos2(x0, row_top), egui::vec2(x1 - x0, 28.0));
+                let hr = ui
+                    .interact(row, ui.id().with(("w_city_row", i)), egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                let ht = ui
+                    .ctx()
+                    .animate_bool_with_time(ui.id().with(("w_city_row_hover", i)), hr.hovered(), 0.11);
+                if ht > 0.001 {
+                    painter.rect_filled(row, 6.0, mint(0.10 * appear * ht));
+                }
+                let row_ink = egui::Color32::from_rgba_unmultiplied(233, 236, 242, (a as f32 * appear) as u8);
+                let row_dim = egui::Color32::from_rgba_unmultiplied(
+                    107,
+                    113,
+                    128,
+                    (a as f32 * 0.60 * appear) as u8,
+                );
+                painter.text(
+                    egui::pos2(x0 + 8.0, row_top + 14.0),
+                    egui::Align2::LEFT_CENTER,
+                    &hit.name,
+                    egui::FontId::proportional(12.0),
+                    row_ink,
+                );
+                painter.text(
+                    egui::pos2(x1 - 8.0, row_top + 14.0),
+                    egui::Align2::RIGHT_CENTER,
+                    &hit.province,
+                    egui::FontId::proportional(9.5),
+                    row_dim,
+                );
+                if hr.clicked() && appear > 0.5 {
+                    let key = hit.key.clone();
+                    let name = hit.name.clone();
+                    self.set_weather_city(&key, &name);
+                    self.close_city_search();
+                }
+                yy += 28.0;
+            }
+            if list_age < 0.5 {
+                ui.ctx().request_repaint();
+            }
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(120));
+    }
+
     /// 内置设置页（音乐模块内，覆盖右侧内容区）：歌词 / 显示 两组可调项。
     fn draw_settings_page(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, content: egui::Rect, e: f32, vis: f32) {
         let vis = vis.clamp(0.0, 1.0);
         let full = content;
+        // 不依赖上一帧可能滞后的窗口原点，保证能精确贴到最?最右角?
+        // 返回时反向淡出，避免硬切造成突兀（界面约定：一切界面变化都要有过渡）�?
+        let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.05);
+        let target = if self.w_city_search { 1.0 } else { 0.0 };
+        let k = 1.0 - (-dt / 0.085).exp();
+        self.w_city_search_anim += (target - self.w_city_search_anim) * k;
+        if (target - self.w_city_search_anim).abs() > 0.002 {
+            ui.ctx().request_repaint();
+        }
+        let search_anim = self.w_city_search_anim.clamp(0.0, 1.0);
+        let base_vis = vis * (1.0 - search_anim);
+        // 搜索页完全展开时不必再绘制设置页（也避免底层控件被误触）；
+        // 过渡过程中两侧同时绘制，形成交叉淡入淡出�?
+        if !(self.w_city_search && search_anim >= 0.999) {
+            self.draw_settings_base(ui, painter, content, e, base_vis);
+        }
+        if search_anim > 0.001 {
+            // 搜索页在最上层：先吃掉背景点击，避免穿透到设置页控�?
+            let _ = ui.interact(full, ui.id().with("w_city_modal"), egui::Sense::click());
+            self.draw_city_search_page(ui, painter, full, e, vis * search_anim);
+        }
+    }
+
+    fn draw_settings_base(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, content: egui::Rect, e: f32, vis: f32) {
+        let vis = vis.clamp(0.0, 1.0);
+        let full = content;
         // 待机表情网格需要所有表情的动画帧，提前全部加载
-        if self.cfg.collapsed_mode == 1 {
+        if self.face_mode_active() {
             for i in 0..FACES.len() {
                 self.ensure_face_frames(ui.ctx(), i);
             }
@@ -2803,7 +4618,7 @@ impl IslandApp {
         let bh = egui::Rect::from_center_size(bc, egui::vec2(30.0, 30.0));
         let bresp = ui.interact(bh, ui.id().with("set_back"), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
         painter.text(bc, egui::Align2::CENTER_CENTER, "\u{E72B}", icon_font(12.5), ink); // Back
-        if bresp.clicked() { self.show_settings = false; }
+        if bresp.clicked() { self.show_settings = false; self.w_city_search = false; self.w_city_search_from_weather = false; }
 
         let left = content.left() + CONTENT_PAD_X;
         let right = content.right() - CONTENT_PAD_X;
@@ -2811,33 +4626,65 @@ impl IslandApp {
         let label_h = 18.0f32;
         let group_gap = 12.0f32;
         // 待机表情：可视化点选网格（7 列 × 2 行，每个格子播放对应表情动画）
-        let tile_h = 46.0f32;
+        let tile_h = 60.0f32;
         let tile_gap = 5.0f32;
         let grid_h = tile_h * 2.0 + tile_gap;
         // 设置内容区可滚动（设置项变多时自动出现滚动）
         let list_top = content.top() + header_h;
         let list_bottom = content.bottom() - CONTENT_PAD_B;
         let view_h = (list_bottom - list_top).max(1.0);
-        let face_rows = if self.cfg.collapsed_mode == 1 { 1.0 } else { 0.0 };
-        let mut total_h = label_h * 3.0 + group_gap * 2.0 + row_h * (4.0 + face_rows);
-        if self.cfg.collapsed_mode == 1 {
-            total_h += grid_h;
+        let face_on = self.face_mode_active();
+        let mut total_h = label_h * 4.0 + group_gap * 3.0 + row_h * 8.0 + label_h;
+        if face_on {
+            total_h += row_h + grid_h;
         }
         let max_scroll = (total_h - view_h).max(0.0);
         // 滚轮只累加“目标值”，再让实际偏移每帧平滑逼近，形成丝滑的过渡
+        let mut scroll_activity = false;
         if let Some(ph) = ui.ctx().pointer_hover_pos() {
             if full.contains(ph) && max_scroll > 0.0 {
                 let d = ui.input(|i| i.raw_scroll_delta.y);
-                self.settings_scroll_target -= d;
+                if d.abs() > 0.01 {
+                    self.settings_scroll_target -= d;
+                    scroll_activity = true;
+                }
             }
         }
         self.settings_scroll_target = self.settings_scroll_target.clamp(0.0, max_scroll);
-        // 指数平滑（时间常数 ~70ms），越接近目标越慢，收尾自然
+        // 仅调试：WINISLE_SET_SCROLL=<px> 直接设定滚动位置（用于无鼠标截图验证）
+        if let Ok(v) = std::env::var("WINISLE_SET_SCROLL") {
+            if let Ok(px) = v.trim().parse::<f32>() {
+                self.settings_scroll_target = px.clamp(0.0, max_scroll);
+                self.settings_scroll = self.settings_scroll_target;
+            }
+        }
+        // 指数平滑（时间常�?~70ms），越接近目标越慢，收尾自然
         let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.05);
         let k = 1.0 - (-dt / 0.07).exp();
         self.settings_scroll += (self.settings_scroll_target - self.settings_scroll) * k;
         self.settings_scroll = self.settings_scroll.clamp(0.0, max_scroll);
+        let settling = (self.settings_scroll_target - self.settings_scroll).abs() > 0.5;
         if (self.settings_scroll_target - self.settings_scroll).abs() > 0.25 {
+            ui.ctx().request_repaint();
+        }
+        // 滚动条自动隐藏：滚动 / 惯性滚动期间显示，停止�?1 秒后淡出
+        if scroll_activity {
+            self.settings_scroll_act = std::time::Instant::now();
+        }
+        let since_act = self.settings_scroll_act.elapsed().as_secs_f32();
+        let want_vis = if max_scroll > 0.0 && (scroll_activity || settling || since_act < 1.2) {
+            1.0
+        } else {
+            0.0
+        };
+        let kv = 1.0 - (-dt / 0.12).exp();
+        self.settings_scroll_vis += (want_vis - self.settings_scroll_vis) * kv;
+        if self.settings_scroll_vis < 0.005 {
+            self.settings_scroll_vis = 0.0;
+        } else if self.settings_scroll_vis > 0.995 {
+            self.settings_scroll_vis = 1.0;
+        }
+        if (self.settings_scroll_vis - want_vis).abs() > 0.005 {
             ui.ctx().request_repaint();
         }
         let list_rect = egui::Rect::from_min_max(
@@ -2854,26 +4701,176 @@ impl IslandApp {
         };
         let tg = |y: f32| egui::Rect::from_min_size(egui::pos2(right - 32.0, y + row_h * 0.5 - 8.0), egui::vec2(32.0, 16.0));
 
-        // 分组：收起态
+        // 分组：收起态（可组合组件：拖动排序 + 开关）
         painter.text(egui::pos2(left, y), egui::Align2::LEFT_TOP, "收起态", egui::FontId::proportional(13.0), muted2);
         y += label_h;
-        // 无音乐时展示：时间 / 待机表情
-        row_label(painter, y, "无音乐时", ink);
         {
-            let seg = egui::Rect::from_min_max(egui::pos2(right - 92.0, y + 5.0), egui::pos2(right, y + row_h - 5.0));
-            if let Some(v) = Self::draw_segment(ui, painter, seg, &["时间", "表情"], self.cfg.collapsed_mode as usize, ui.id().with("seg_collapsed"), accent, a) {
-                self.cfg.collapsed_mode = v as u8;
-                changed = true;
+            let mut order = self.comp_order();
+            let comps_top = y;
+            let row_w = right - left;
+            let toggle_w = 44.0;
+            let drag_id = ui.id().with("cset_drag");
+            let dragging: Option<String> = ui.data(|d| d.get_temp::<String>(drag_id));
+            let n = order.len();
+            // 每个组件一个平滑的槽位动画（索引）：重排时各行顺滑滑动到新位置
+            let slots: Vec<f32> = order
+                .iter()
+                .enumerate()
+                .map(|(i, (id, _))| {
+                    ui.ctx().animate_value_with_time(ui.id().with(("cset_pos", id)), i as f32, 0.09)
+                })
+                .collect();
+            let ptr = ui.ctx().pointer_hover_pos();
+            let down = ui.ctx().input(|i| i.pointer.any_down());
+            let force_hl: Option<String> = std::env::var("WINISLE_SET_HL").ok();
+            let drag_preview: Option<String> = std::env::var("WINISLE_DRAG_PREVIEW").ok();
+            // 正在拖动：被拖行直接跟随指针，其余行动画到新槽位
+            let drag_fy: Option<(String, f32)> = if let Some(did) = dragging.clone() {
+                if down {
+                    ptr.map(|p| (did, (((p.y - comps_top) / row_h) - 0.5).clamp(0.0, (n.max(1) - 1) as f32)))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            // 被拖行最后绘制，浮到最上层
+            let mut draw_order: Vec<usize> = (0..n).collect();
+            if let Some((did, _)) = &drag_fy {
+                if let Some(ci) = order.iter().position(|(x, _)| x == did) {
+                    draw_order.retain(|&k| k != ci);
+                    draw_order.push(ci);
+                }
             }
+            for &i in &draw_order {
+                let (id, on) = order[i].clone();
+                let is_drag = (drag_fy.as_ref().map(|(d, _)| d == &id).unwrap_or(false) && down)
+                    || drag_preview.as_deref() == Some(id.as_str());
+                // 上一版手感：被拖行跟随指针（连续），其余行平滑让位；被拖行用不透明浮起卡片盖住，
+                // 因此即使过渡中短暂覆盖到相邻行，也不会出现两层透叠的“重影”。
+                let slot = if is_drag {
+                    drag_fy.as_ref().map(|(_, f)| *f).unwrap_or(i as f32)
+                } else if drag_preview.as_deref() == Some(id.as_str()) {
+                    i as f32
+                } else {
+                    slots[i]
+                };
+                let ry = comps_top + slot * row_h;
+                let rrect = egui::Rect::from_min_size(egui::pos2(left, ry), egui::vec2(row_w, row_h));
+                let hovered = ptr.map(|p| rrect.contains(p)).unwrap_or(false);
+                // 被拖行：先画一块不透明的“浮起卡片”底，盖住其下方/相邻内容，任何情况下都不会出现透叠
+                if is_drag {
+                    // 卡片严格限制在内容区内（左=left、右=right），不再向外溢出，避免压到面板留白/圆角
+                    let card = egui::Rect::from_min_max(
+                        egui::pos2(left, ry + 1.0),
+                        egui::pos2(right, ry + row_h - 1.0),
+                    );
+                    painter.rect_filled(card.translate(egui::vec2(0.0, 3.0)), 8.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 70));
+                    let c = egui::Color32::from_rgb(
+                        self.cfg.bg[0].saturating_add(16),
+                        self.cfg.bg[1].saturating_add(16),
+                        self.cfg.bg[2].saturating_add(18),
+                    );
+                    painter.rect_filled(card, 8.0, c);
+                    painter.rect_stroke(card, 8.0, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, 110)), egui::StrokeKind::Inside);
+                }
+                // 行高亮：与内容区同宽（left..right，正好包住尾部开关，不外溢），低透薄荷绿融入背景
+                if hovered || is_drag || force_hl.as_deref() == Some(id.as_str()) {
+                    let ha = ((if is_drag { 30.0 } else { 14.0 }) * (a as f32 / 255.0)) as u8;
+                    let hl = egui::Rect::from_min_max(
+                        egui::pos2(left, ry + 2.0),
+                        egui::pos2(right, ry + row_h - 2.0),
+                    );
+                    painter.rect_filled(hl, 7.0, egui::Color32::from_rgba_unmultiplied(52, 211, 153, ha));
+                }
+                // 拖拽热区（左侧，排除右侧开关）
+                let hrect = egui::Rect::from_min_max(rrect.min, egui::pos2(rrect.right() - toggle_w, rrect.bottom()));
+                let hresp = ui.interact(hrect, ui.id().with(("cset_h", &id)), egui::Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::Grab);
+                if hresp.drag_started() {
+                    ui.data_mut(|d| d.insert_temp(drag_id, id.clone()));
+                }
+                // 拖动图标：手绘 2×3 圆点，垂直居中，保证与文字同一水平线
+                let hcx = left + 9.0;
+                let hcy = ry + row_h * 0.5;
+                for col in 0..2 {
+                    for rr in 0..3 {
+                        painter.circle_filled(
+                            egui::pos2(hcx + col as f32 * 4.0, hcy - 5.0 + rr as f32 * 5.0),
+                            1.35,
+                            muted2,
+                        );
+                    }
+                }
+                // 开关可用性：已启用可随时关闭；未启用则需“加上它也不超过 520”才允许开启
+                let can_toggle = if on {
+                    true
+                } else {
+                    let mut probe = order.clone();
+                    probe[i].1 = true;
+                    self.order_base_width(&probe) <= CW_MAX + 0.01
+                };
+                let label_col = if can_toggle { ink } else { muted2 };
+                painter.text(egui::pos2(left + 24.0, ry + row_h * 0.5), egui::Align2::LEFT_CENTER, Self::comp_label(&id), egui::FontId::proportional(13.5), label_col);
+                // 开关
+                let trect = egui::Rect::from_min_size(egui::pos2(right - 37.0, ry + row_h * 0.5 - 8.0), egui::vec2(32.0, 16.0));
+                if let Some(v) = Self::draw_toggle(ui, painter, trect, on, ui.id().with(("cset_tg", &id)), accent, a, can_toggle) {
+                    order[i].1 = v;
+                    self.set_comp_order(&order);
+                    changed = true;
+                }
+            }
+            y = comps_top + n as f32 * row_h;
+            // 拖动中：按指针实时重排（写入配置，下一帧各行动画滑到新位置）
+            if let Some((did, _)) = drag_fy.clone() {
+                if let Some(p) = ptr {
+                    if let Some(cur) = order.iter().position(|(x, _)| x == &did) {
+                        // 提前 0.30 行触发让位（不必等拖到正中），让被占位那行“提前知道、先让开”，
+                        // 减少拖动时压到还没让开的行。逐帧最多挪一格，节奏更快。
+                        let fy = (p.y - comps_top) / row_h;
+                        let mut target = cur;
+                        // 用“半个行高”作为换位阈值：这是左右两侧对称的临界点，
+                        // 拖动中指针停住不动时不会来回翻（旧版 0.30 阈值会造成
+                        // 让位区间重叠 → 每帧在相邻两格间反复横跳，表现为“一直振动移不开”）。
+                        if fy - cur as f32 > 0.5 {
+                            target = (cur + 1).min(n - 1);
+                        } else if cur as f32 - fy > 0.5 {
+                            target = cur.saturating_sub(1);
+                        }
+                        if target != cur {
+                            let item = order.remove(cur);
+                            order.insert(target, item);
+                            self.set_comp_order(&order);
+                            changed = true;
+                        }
+                    }
+                }
+                ui.ctx().request_repaint();
+            } else if dragging.is_some() {
+                ui.data_mut(|d| d.remove_temp::<String>(drag_id));
+            }
+            // 动画进行中持续重绘（松手后的回位滑行也依赖它）
+            if slots.iter().enumerate().any(|(i, v)| (v - i as f32).abs() > 0.001) {
+                ui.ctx().request_repaint();
+            }
+            // 宽度提示：已用宽度 / 上限
+            let used = self.order_base_width(&order);
+            let comp_n = order.iter().filter(|(_, on)| *on).count();
+            let hint = format!("占宽 {:.0} / {:.0}（{} 项启用）", used, CW_MAX, comp_n);
+            painter.text(egui::pos2(left, y + label_h * 0.5), egui::Align2::LEFT_CENTER, hint, egui::FontId::proportional(11.0), muted2);
+            y += label_h;
         }
-        y += row_h;
-        if self.cfg.collapsed_mode == 1 {
+        if face_on {
             // 待机表情：可视化点选网格（每个格子实时播放对应表情动画，点击即可选中）
             row_label(painter, y, "待机表情", ink);
             y += row_h;
             let area = egui::Rect::from_min_size(egui::pos2(left, y), egui::vec2(right - left, grid_h));
             let tsec = ui.input(|i| i.time);
-            if let Some(v) = Self::draw_face_grid(ui, painter, area, self.cfg.idle_face, ui.id().with("face_grid"), a, accent, &self.face_frames, tsec) {
+            let mut face_uvs: Vec<Option<(f32, f32, f32, f32)>> = Vec::with_capacity(FACES.len());
+            for fi in 0..FACES.len() {
+                let has = self.face_frames.get(fi).map_or(false, |o| o.is_some());
+                face_uvs.push(if has { Some(self.face_content_uv(fi)) } else { None });
+            }
+            if let Some(v) = Self::draw_face_grid(ui, painter, area, self.cfg.idle_face, ui.id().with("face_grid"), a, accent, &self.face_frames, &face_uvs, tsec) {
                 self.cfg.idle_face = v;
                 changed = true;
             }
@@ -2881,13 +4878,27 @@ impl IslandApp {
             y += grid_h;
         }
 
-        // 分组：歌词
+        // 分组：歌�?
         y += group_gap;
         painter.text(egui::pos2(left, y), egui::Align2::LEFT_TOP, "歌词", egui::FontId::proportional(13.0), muted2);
         y += label_h;
         // 换行滚动动画
         row_label(painter, y, "换行滚动动画", ink);
-        { let trect = tg(y); if let Some(v) = Self::draw_toggle(ui, painter, trect, self.cfg.roll_anim, ui.id().with("tg_roll"), accent, a) { self.cfg.roll_anim = v; changed = true; } }
+        { let trect = tg(y); if let Some(v) = Self::draw_toggle(ui, painter, trect, self.cfg.roll_anim, ui.id().with("tg_roll"), accent, a, true) { self.cfg.roll_anim = v; changed = true; } }
+        y += row_h;
+
+        // 分组：天气（温度单位）——城市固定跟随当前位置，无需选择
+        y += group_gap;
+        painter.text(egui::pos2(left, y), egui::Align2::LEFT_TOP, "天气", egui::FontId::proportional(13.0), muted2);
+        y += label_h;
+        row_label(painter, y, "温度单位", ink);
+        {
+            let seg = egui::Rect::from_min_max(egui::pos2(right - 104.0, y + 5.0), egui::pos2(right, y + row_h - 5.0));
+            if let Some(v) = Self::draw_segment(ui, painter, seg, &["摄氏度", "华氏度"], self.cfg.weather_unit as usize, ui.id().with("seg_unit"), accent, a) {
+                self.cfg.weather_unit = v as u8;
+                changed = true;
+            }
+        }
         y += row_h;
 
         // 分组：通用（软件更新，所有模块共用）
@@ -2966,44 +4977,46 @@ impl IslandApp {
         }
         y += row_h;
 
-        // 滚动条（内容超出时）
-        if max_scroll > 0.0 {
+        // 滚动条（内容超出时，滚动时淡入、停止后自动淡出）——细样式，与天气页滚动条一致（2px�?
+        if max_scroll > 0.0 && self.settings_scroll_vis > 0.01 {
+            let sv = self.settings_scroll_vis;
+            let tx = full.right() - 4.0;
             let track = egui::Rect::from_min_max(
-                egui::pos2(full.right() - 5.0, list_top),
-                egui::pos2(full.right() - 2.0, list_bottom),
+                egui::pos2(tx, list_top + 2.0),
+                egui::pos2(tx + 2.0, list_bottom - 2.0),
             );
-            painter.rect_filled(track, 1.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (a as f32 * 0.04) as u8));
-            let frac = (view_h / total_h).clamp(0.0, 1.0);
-            let th = (view_h * frac).max(24.0).min(view_h);
-            let ty = list_top + (view_h - th) * (self.settings_scroll / max_scroll);
-            painter.rect_filled(
-                egui::Rect::from_min_max(egui::pos2(track.left(), ty), egui::pos2(track.right(), ty + th)),
-                1.5,
-                egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), (a as f32 * 0.45) as u8),
-            );
+            painter.rect_filled(track, 1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (12.0 * sv) as u8));
+            let th = ((view_h / total_h.max(1.0)) * track.height()).max(14.0);
+            let range = (track.height() - th).max(1.0);
+            let tp = (self.settings_scroll / max_scroll.max(1.0)) * range;
+            let thumb = egui::Rect::from_min_size(egui::pos2(tx, track.top() + tp), egui::vec2(2.0, th));
+            painter.rect_filled(thumb, 1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (60.0 * sv) as u8));
         }
 
         if changed { self.cfg.save(); }
     }
 
     /// 开关控件（绘制 + 点击），带滑动/变色动画。返回 Some(新值) 表示被点击切换。
-    fn draw_toggle(ui: &mut egui::Ui, painter: &egui::Painter, rect: egui::Rect, on: bool, id: egui::Id, accent: egui::Color32, a: u8) -> Option<bool> {
+    fn draw_toggle(ui: &mut egui::Ui, painter: &egui::Painter, rect: egui::Rect, on: bool, id: egui::Id, accent: egui::Color32, a: u8, enabled: bool) -> Option<bool> {
         let t = ui.ctx().animate_bool_with_time(id.with("anim"), on, 0.16);
-        let resp = ui.interact(rect.expand(5.0), id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        // 禁用（如已达宽度上限、不允许再开启）时整体压暗且不响应点击
+        let da = if enabled { a } else { ((a as f32) * 0.42) as u8 };
         let lerp_u = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
         let bg = egui::Color32::from_rgba_unmultiplied(
-            lerp_u(78, accent.r()), lerp_u(82, accent.g()), lerp_u(96, accent.b()), a,
+            lerp_u(78, accent.r()), lerp_u(82, accent.g()), lerp_u(96, accent.b()), da,
         );
         painter.rect_filled(rect, rect.height() * 0.5, bg);
         let r = rect.height() * 0.5 - 2.0;
         let kx0 = rect.left() + r + 2.0;
         let kx1 = rect.right() - r - 2.0;
         let kx = kx0 + (kx1 - kx0) * t;
-        painter.circle_filled(egui::pos2(kx, rect.center().y), r, egui::Color32::from_rgba_unmultiplied(246, 248, 251, a));
+        painter.circle_filled(egui::pos2(kx, rect.center().y), r, egui::Color32::from_rgba_unmultiplied(246, 248, 251, da));
+        if !enabled { return None; }
+        let resp = ui.interact(rect.expand(5.0), id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
         if resp.clicked() { Some(!on) } else { None }
     }
 
-    /// 滑块控件（绘制 + 拖动）。返回 Some(新值) 表示被拖动/点击修改。
+    /// 滑块控件（绘�?+ 拖动）。返�?Some(新�? 表示被拖�?点击修改�?
     #[allow(clippy::too_many_arguments)]
     fn draw_slider(ui: &mut egui::Ui, painter: &egui::Painter, zone: egui::Rect, val: f32, min: f32, max: f32, step: f32, suffix: &str, enabled: bool, id: egui::Id, accent: egui::Color32, a: u8) -> Option<f32> {
         let track = egui::Rect::from_min_max(egui::pos2(zone.left(), zone.center().y - 2.0), egui::pos2(zone.right() - 56.0, zone.center().y + 2.0));
@@ -3078,8 +5091,13 @@ impl IslandApp {
     /// 待机表情选择器：左侧实时预览 + 名称 + 左右箭头。返回 Some(新编号)。
     fn draw_face_stepper(ui: &mut egui::Ui, painter: &egui::Painter, rect: egui::Rect, cur: u8, id: egui::Id, a: u8, face_frames: &[Option<Vec<egui::TextureHandle>>]) -> Option<u8> {
         let resp = ui.interact(rect, id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-        let n = FACES.len();
-        let cur_i = (cur as usize).min(n - 1);
+        let kept = face_kept_indices();
+        let n = kept.len().max(1);
+        let cur_pos = kept
+            .iter()
+            .position(|&x| x == cur as usize)
+            .unwrap_or(0);
+        let cur_i = kept.get(cur_pos).copied().unwrap_or(0);
         let tex = face_frames.get(cur_i).and_then(|o| o.as_ref()).and_then(|v| v.get(0));
         let fh = (rect.height() - 6.0).min(16.0).max(8.0);
         let fw = match tex {
@@ -3107,9 +5125,9 @@ impl IslandApp {
         if resp.clicked() {
             if let Some(p) = resp.interact_pointer_pos() {
                 if lz.contains(p) {
-                    out = Some(((cur_i + n - 1) % n) as u8);
+                    out = Some(kept[(cur_pos + n - 1) % n] as u8);
                 } else if rz.contains(p) {
-                    out = Some(((cur_i + 1) % n) as u8);
+                    out = Some(kept[(cur_pos + 1) % n] as u8);
                 }
             }
         }
@@ -3127,9 +5145,11 @@ impl IslandApp {
         a: u8,
         accent: egui::Color32,
         face_frames: &[Option<Vec<egui::TextureHandle>>],
+        uvs: &[Option<(f32, f32, f32, f32)>],
         t: f64,
     ) -> Option<u8> {
-        let n = FACES.len();
+        let kept = face_kept_indices();
+        let n = kept.len();
         let cols = 7usize;
         let rows = (n + cols - 1) / cols;
         let gap = 5.0f32;
@@ -3137,9 +5157,9 @@ impl IslandApp {
         let cell_h = (area.height() - (rows as f32 - 1.0) * gap) / rows as f32;
         let metas = Self::face_anim_meta();
         let mut out = None;
-        for i in 0..n {
-            let r = i / cols;
-            let c = i % cols;
+        for (pos, &i) in kept.iter().enumerate() {
+            let r = pos / cols;
+            let c = pos % cols;
             let trect = egui::Rect::from_min_size(
                 egui::pos2(area.left() + c as f32 * cell_w + gap * 0.5, area.top() + r as f32 * (cell_h + gap)),
                 egui::vec2(cell_w - gap, cell_h),
@@ -3165,9 +5185,42 @@ impl IslandApp {
                 .get(i)
                 .and_then(|o| o.as_ref())
                 .and_then(|v| v.get(frame));
-            let fh = (cell_h - 8.0).clamp(16.0, 40.0);
-            let cy = trect.top() + 2.0 + fh * 0.5;
-            draw_robot_face(painter, egui::pos2(trect.center().x, cy), fh, a, i as u8, 0.0, tex);
+            let fh_max = (cell_h - 8.0).clamp(16.0, 46.0);
+            let (pw, ph) = metas
+                .get(i)
+                .map(|m| (m.0 as f32, m.1 as f32))
+                .unwrap_or((77.0, 80.0));
+            let uv = uvs.get(i).and_then(|o| *o);
+            // 表情可视区域：顶部留 4px、底部给名称留 14px，整体在区域内垂直居中，避免偏上。
+            let av_top = trect.top() + 4.0;
+            let av_bot = trect.bottom() - 14.0;
+            let av_h = (av_bot - av_top).max(8.0);
+            let cy = (av_top + av_bot) * 0.5;
+            if let (Some(tx), Some((u0, v0, u1, v1))) = (tex, uv) {
+                // 与收起态保持一致的渲染：按内容包围盒裁剪 + 两眼间距收拢
+                let content_aspect =
+                    ((pw * (u1 - u0)) / (ph * (v1 - v0)).max(1.0)).max(0.2);
+                let mut draw_h = fh_max.min(av_h);
+                let mut fw = draw_h * content_aspect;
+                let maxw = (trect.width() - 6.0).max(8.0);
+                if fw > maxw {
+                    fw = maxw;
+                    draw_h = fw / content_aspect;
+                }
+                draw_face_img_cropped(
+                    painter,
+                    egui::pos2(trect.center().x, cy),
+                    fw,
+                    draw_h,
+                    a,
+                    tx,
+                    (u0, v0, u1, v1),
+                    FACE_EYE_GAP_REDUCE,
+                );
+            } else {
+                let draw_h = fh_max.min(av_h);
+                draw_robot_face(painter, egui::pos2(trect.center().x, cy), draw_h, a, i as u8, 0.0, tex);
+            }
             // 名称
             let lcol = if sel {
                 egui::Color32::from_rgba_unmultiplied(235, 238, 245, a)
@@ -3175,7 +5228,7 @@ impl IslandApp {
                 egui::Color32::from_rgba_unmultiplied(150, 158, 175, a)
             };
             painter.text(
-                egui::pos2(trect.center().x, trect.bottom() - 5.0),
+                egui::pos2(trect.center().x, trect.bottom() - 9.0),
                 egui::Align2::CENTER_CENTER,
                 FACES[i],
                 egui::FontId::proportional(9.0),
@@ -3387,11 +5440,34 @@ impl eframe::App for IslandApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // 仅调试：WINISLE_PPP=<f> 强制像素比（用于无鼠标截图验证下的稳定渲染）
+        if let Ok(v) = std::env::var("WINISLE_PPP") {
+            if let Ok(ppp) = v.trim().parse::<f32>() {
+                ctx.set_pixels_per_point(ppp);
+            }
+        }
+        // 仅调试：WINISLE_IDLE_FACE=<n> 指定当前选中的待机表情（用于无鼠标截图验证选中描边）
+        if let Ok(v) = std::env::var("WINISLE_IDLE_FACE") {
+            if let Ok(n) = v.trim().parse::<u8>() {
+                self.cfg.idle_face = n;
+            }
+        }
         let _pf_t0 = std::time::Instant::now();
         self.perf_region_ms = 0.0;
         self.perf_netease_ms = 0.0;
         self.poll_update();
+        self.poll_weather();
+        self.poll_city_search();
         self.ensure_window(frame);
+        // 只有城市搜索页需要键盘输入时才临时允许窗口被激活；普通展开/收起一律不抢焦点。
+        let want_activatable = self.w_city_search;
+        if want_activatable != self.w_activatable_last {
+            self.w_activatable_last = want_activatable;
+            platform::set_activatable(self.hwnd, want_activatable);
+            if want_activatable {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
         platform::ensure_erase_guard(self.hwnd);
         let _pf_t_win = std::time::Instant::now();
         // 久置后第一次刷新前：先把客户区同步刷成深色，盖住系统重绘那一帧可能露出的白底。
@@ -3408,11 +5484,7 @@ impl eframe::App for IslandApp {
             self.tt_arm0 = Some(make_tex(ctx, "tt_arm0", include_bytes!("../assets/tt_arm.rgba"), 540, 540));
         }
 
-        if let Some(ms) = ctx.input(|i| i.viewport().monitor_size) {
-            if ms.x > 1.0 && ms.y > 1.0 {
-                self.monitor = ms;
-            }
-        }
+        self.refresh_monitor(ctx);
 
         // 音乐模块：主线程非阻塞推进 SMTC 状态机，取最新快照
         let _pf_t_snap0 = std::time::Instant::now();
@@ -3420,7 +5492,7 @@ impl eframe::App for IslandApp {
         let _pf_snap_ms = _pf_t_snap0.elapsed().as_secs_f32() * 1000.0;
         // 记录本次快照是否真的来自 SMTC（否则后面的窗口标题兜底会覆盖它）
         self.from_smtc = self.music.has_session && !self.music.title.is_empty();
-        // 网易云时间轴读取线程按需启停：只有当前会话是网易云时才运行，其它播放器/空闲时完全退出。
+        // 不依赖上一帧可能滞后的窗口原点，保证能精确贴到最?最右角?
         {
             let a = self.music.app_id.to_ascii_lowercase();
             let is_netease = self.music.has_session
@@ -3471,11 +5543,6 @@ impl eframe::App for IslandApp {
             self.from_smtc = false;
             self.ui_playing = true;
         }
-        if let Ok(long) = std::env::var("WINISLE_LONG") {
-            // 调试：注入一条超长“歌词”用于检查收起态跑马灯/渐绿渲染
-            self.lyr_lines = vec![lyrics::LrcLine { t: 0.0, text: long, segs: Vec::new() }];
-            self.lyr_key = "LONG".into();
-        }
         // 以 SMTC 真实 Position 作为歌词/进度时间基准（最小化到托盘也有效）。
         // 关键点：像汽水音乐这类播放器会【一直上报同一个静止 position】（haspos=true 但数值不变），
         // 若拿它反复校准，会把不断外推的进度一次次拉回原点，表现为“歌词来回跳/跟不上”。
@@ -3494,7 +5561,7 @@ impl eframe::App for IslandApp {
                 let d = rep - cur;
                 // 向前明显领先（>=0.5s，粗量化/初次偏旧）就校准；
                 // 向后只有「上报值真的倒退了」（拖动进度/回退），而不是“推进得比外推慢”时才回退——
-                // 后者只会造成进度被反复往回拽（汽水那种低频率粗上报正是如此）。
+                // 迷你?
                 let rewound = rep + 0.5 < prev;
                 if d > 0.5 || (d < -1.5 && rewound) {
                     self.spos = rep;
@@ -3527,7 +5594,7 @@ impl eframe::App for IslandApp {
                 self.spos_valid = false;
             }
         }
-        // 记录“好标题”：标题稳定时才刷新；短暂读不到时用最近一次的好标题顶住（最多 15s），避免闪烁
+        // 记录“好标题”：标题稳定时才刷新；短暂读不到时用最近一次的好标题顶住（最�?15s），避免闪烁
         if !self.music.title.is_empty() {
             self.last_title = Some((
                 self.music.app_id.clone(),
@@ -3544,7 +5611,7 @@ impl eframe::App for IslandApp {
                 self.music.app_id = exe;
             }
         }
-        // 只要拿到了歌名/歌手（无论来自 SMTC 还是窗口标题兜底），就视为有会话
+        // 只要拿到了歌�?歌手（无论来�?SMTC 还是窗口标题兜底），就视为有会话
         if !self.music.title.is_empty() {
             self.music.has_session = true;
         }
@@ -3570,7 +5637,7 @@ impl eframe::App for IslandApp {
         } else {
             self.music_lost_since = None;
         }
-        // 音乐模块的出现/消失做平滑过渡：宽度、内容透明度、空态之间渐入渐出
+        // 不依赖上一帧可能滞后的窗口原点，保证能精确贴到最?最右角?
         {
             let dt = ctx.input(|i| i.stable_dt).min(0.05);
             let target_amt = if !self.music.title.is_empty() { 1.0f32 } else { 0.0 };
@@ -3652,8 +5719,8 @@ impl eframe::App for IslandApp {
                     Some(Ok(Some((p, tot)))) => {
                         self.soda_prog_rx = None;
                         self.soda_dur = tot;
-                        // 进度条 width 的采样有量化误差：小幅“倒退”是误差，不是真的往回拖，
-                        // 直接采用会让逐字高亮退回一两个字。略过小幅倒退，只接受前进或真正的后退拖动。
+                        // 进度�?width 的采样有量化误差：小幅“倒退”是误差，不是真的往回拖�?
+                        // 直接采用会让逐字高亮退回一两个字。略过小幅倒退，只接受前进或真正的后退拖动�?
                         let cur = self.current_pos();
                         let small_back = p + 0.05 < cur && p > cur - 1.2;
                         if !small_back {
@@ -3668,8 +5735,8 @@ impl eframe::App for IslandApp {
                     Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => {}
                 }
             }
-        }        // VIP 试听片段起点探测：播放时长 <60s（试听片段）时，扫描网易云内存日志里
-        // 本轮播放开始后的 freeTrialInfo.start，把“片段内相对时间”映射到整首歌绝对时间。
+        }        // VIP 试听片段起点探测：播放时�?<60s（试听片段）时，扫描网易云内存日志里
+        // 本轮播放开始后�?freeTrialInfo.start，把“片段内相对时间”映射到整首歌绝对时间�?
         if self.app_is_soda() {
             // 汽水：不使用网易云试听探测，试听起点只由汽水自身逻辑处理
             self.trial_probe = None;
@@ -3714,7 +5781,7 @@ impl eframe::App for IslandApp {
             self.cover_tex = None;
             self.pending_title = None;
             self.netease_dur = 0.0;
-            // 进度：汽水只用自身 SMTC/CDP 时间；其它播放器优先用网易云内存真实位置
+            // 进度：汽水只用自�?SMTC/CDP 时间；其它播放器优先用网易云内存真实位置
             if self.app_is_soda() {
                 self.spos_valid = self.music.has_position && self.music.position > 0.0;
                 self.spos = self.music.position;
@@ -3747,9 +5814,9 @@ impl eframe::App for IslandApp {
                 let _ = self.lyr_tx.send((key.clone(), self.music.title.clone(), self.music.artist.clone(), dur_now, is_soda));
             }
         } else {
-            // 同名不同版本纠偏：拿到播放器真实总时长后，若与当初选歌词用的时长差 >4s，
-            // 说明选到了别的版本（时间轴不同，歌词必然对不上）→ 按真实时长重新取一次。
-            // 注意：VIP 试听上报的 40s 片段不算“真实总时长”，必须 >=60s 才参与纠偏。
+            // 同名不同版本纠偏：拿到播放器真实总时长后，若与当初选歌词用的时长差 >4s�?
+            // 说明选到了别的版本（时间轴不同，歌词必然对不上）�?按真实时长重新取一次�?
+            // 注意：VIP 试听上报�?40s 片段不算“真实总时长”，必须 >=60s 才参与纠偏�?
             if !self.music.title.is_empty()
                 && self.netease_dur >= 60.0
                 && !self.lyr_lines.is_empty()
@@ -3797,7 +5864,7 @@ impl eframe::App for IslandApp {
             }
         }
         // 汽水：歌词页往往比切歌晚一两秒才更新，没拿到歌词时自动重试几次
-        // （否则会一直停在「歌词加载中」或贴上一首）。
+        // （否则会一直停在「歌词加载中」或贴上一首）�?
         if !self.music.title.is_empty()
             && self.lyr_lines.is_empty()
             && !self.lyr_inflight
@@ -3872,8 +5939,19 @@ impl eframe::App for IslandApp {
             self.lyr_lines = v;
         }
 
-        // 收起态歌词“上滚”动画：检测当前句索引是否变化，换到新一句时触发一次上滚过渡。
-        // 同一切歌内才动画（上一句索引仍有效）；切歌时 lyr_key 分支已把 lyr_idx_last 置 -1，故不会误动画。
+        // 调试：WINISLE_LONG="一句话" 覆盖为单条歌词（放在歌词抓取之后，避免被真实歌词覆盖），
+        // 用于验证收起态歌词“自适应宽度 / 跑马灯 / 渐绿”渲染。
+        if let Ok(long) = std::env::var("WINISLE_LONG") {
+            let changed = self.lyr_lines.len() != 1 || self.lyr_lines.first().map(|l| l.text != long).unwrap_or(true);
+            if changed {
+                self.lyr_lines = vec![lyrics::LrcLine { t: 0.0, text: long, segs: Vec::new() }];
+                self.lyr_idx_last = -1;
+            }
+            self.lyr_key = self.music.title.clone();
+        }
+
+        // 收起态歌词“上滚”动画：检测当前句索引是否变化，换到新一句时触发一次上滚过渡�?
+        // 同一切歌内才动画（上一句索引仍有效）；切歌�?lyr_key 分支已把 lyr_idx_last �?-1，故不会误动画�?
         {
             let cur_idx = self.cur_lyric_idx().map(|i| i as i32).unwrap_or(-1);
             if cur_idx != self.lyr_idx_last {
@@ -3889,7 +5967,7 @@ impl eframe::App for IslandApp {
                 }
                 self.lyr_idx_last = cur_idx;
             }
-            // 动画超时兜底清理（正常情况下 draw 里到点也会清）
+            // 动画超时兜底清理（正常情况下 draw 里到点也会清�?
             if let Some(at) = self.lyr_anim_at {
                 if at.elapsed() > Duration::from_millis(700) {
                     self.lyr_anim_at = None;
@@ -3954,6 +6032,8 @@ impl eframe::App for IslandApp {
         // 区域内、不会被硬裁剪，所以圆角依旧平滑；区域外窗口根本不存在，点击自然落到下面?
         // 窗口尺寸始终不变 -> 不重?surface -> 不闪烁?
         self.apply_region(ctx);
+        // 每帧刷新命中矩形：后台穿透轮询线程据此判断光标是否在岛体/面板内（跨进程点击穿透）。
+        self.set_hit_region(ctx);
 
         let _pf_t_pre = std::time::Instant::now();
         egui::CentralPanel::default()
@@ -4019,6 +6099,60 @@ fn chrono_like_now() -> String {
         .unwrap_or_default();
     let s = d.as_secs() % 86400;
     format!("{:02}:{:02}:{:02}.{:03}", s / 3600, (s % 3600) / 60, s % 60, d.subsec_millis())
+}
+
+/// 按 UV 子矩形把表情贴图裁到给定宽高绘制（去掉原图透明留白，使内容真实铺满）。
+/// `gap_reduce`：把左右两半（两只眼睛）各自向中间靠拢 gap_reduce/2 逻辑像素，
+/// 即将两眼的间距缩小 gap_reduce 像素。
+fn draw_face_img_cropped(
+    painter: &egui::Painter,
+    c: egui::Pos2,
+    w: f32,
+    h: f32,
+    a: u8,
+    tx: &egui::TextureHandle,
+    uv: (f32, f32, f32, f32),
+    gap_reduce: f32,
+) {
+    if a == 0 || w <= 1.0 || h <= 1.0 {
+        return;
+    }
+    let full = egui::Rect::from_center_size(c, egui::vec2(w, h));
+    let col = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
+    if gap_reduce.abs() < 0.01 {
+        painter.image(
+            tx.id(),
+            full,
+            egui::Rect::from_min_max(egui::pos2(uv.0, uv.1), egui::pos2(uv.2, uv.3)),
+            col,
+        );
+        return;
+    }
+    // 以内容包围盒的水平中点把贴图切成“左眼/右眼”两半，各自向中间平移半量。
+    let um = (uv.0 + uv.2) * 0.5;
+    let half = gap_reduce * 0.5;
+    let lw = w * (um - uv.0) / (uv.2 - uv.0).max(1e-4);
+    let rw = w * (uv.2 - um) / (uv.2 - uv.0).max(1e-4);
+    let left_rect = egui::Rect::from_min_size(
+        egui::pos2(full.left() + half, full.top()),
+        egui::vec2(lw, h),
+    );
+    let right_rect = egui::Rect::from_min_size(
+        egui::pos2(full.right() - half - rw, full.top()),
+        egui::vec2(rw, h),
+    );
+    painter.image(
+        tx.id(),
+        left_rect,
+        egui::Rect::from_min_max(egui::pos2(uv.0, uv.1), egui::pos2(um, uv.3)),
+        col,
+    );
+    painter.image(
+        tx.id(),
+        right_rect,
+        egui::Rect::from_min_max(egui::pos2(um, uv.1), egui::pos2(uv.2, uv.3)),
+        col,
+    );
 }
 
 /// 收起态「待机表情」：简洁的机器人脸（两只眼睛 + 一张嘴），带眨眼/呼吸微动，
@@ -4300,7 +6434,7 @@ fn draw_robot_face(painter: &egui::Painter, c: egui::Pos2, h: f32, a: u8, expr: 
                 col,
             );
         }
-        // 13 困惑：一大一小眼 + 问号 + 小扁嘴
+        // 13 困惑：一大一小眼 + 问号 + 小扁�?
         _ => {
             round_open(-eye_dx, eye_w * 1.2, eye_h);
             painter.circle_filled(
@@ -4316,6 +6450,145 @@ fn draw_robot_face(painter: &egui::Painter, c: egui::Pos2, h: f32, a: u8, expr: 
                 col,
             );
             flat_mouth(h * 0.24);
+        }
+    }
+}
+
+/// 空气质量文本 -> 颜色（优=薄荷绿，�?黄绿，轻�?黄，中度=橙，重度=红）�?
+fn aqi_color(q: &str, a: u8) -> egui::Color32 {
+    let (r, g, b) = if q.contains("优") {
+        (52, 211, 153)
+    } else if q.contains("良") {
+        (176, 208, 82)
+    } else if q.contains("轻度") {
+        (238, 198, 74)
+    } else if q.contains("中度") {
+        (238, 150, 60)
+    } else if q.contains("重度") || q.contains("严重") {
+        (230, 92, 82)
+    } else {
+        (150, 158, 175)
+    };
+    egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+/// 程序化天气图标（8 种，含简单动画）。`t` 为秒级时间；`bg` 用于夜间月牙的遮罩底色�?
+fn draw_weather_icon(p: &egui::Painter, sky: crate::weather::Sky, c: egui::Pos2, s: f32, a: u8, t: f64, bg: egui::Color32) {
+    use crate::weather::Sky;
+    let mk = |r: u8, g: u8, b: u8| egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+    let sun = mk(255, 206, 92);
+    let sun2 = mk(246, 170, 60);
+    let cloud = mk(206, 216, 230);
+    let rain = mk(120, 182, 238);
+    let snow = mk(233, 244, 255);
+    let bolt = mk(247, 206, 84);
+    let fogc = mk(174, 185, 200);
+    let moon = mk(226, 233, 245);
+
+    let sun_at = |pp: &egui::Painter, cc: egui::Pos2, rad: f32, rays: bool| {
+        pp.circle_filled(cc, rad, sun);
+        pp.circle_filled(cc, rad * 0.70, sun2);
+        if rays {
+            let n = 8;
+            for i in 0..n {
+                let ang = t as f32 * 0.7 + i as f32 * (std::f32::consts::TAU / n as f32);
+                let d1 = rad * 1.30;
+                let d2 = rad * 1.62;
+                pp.line_segment(
+                    [
+                        egui::pos2(cc.x + ang.cos() * d1, cc.y + ang.sin() * d1),
+                        egui::pos2(cc.x + ang.cos() * d2, cc.y + ang.sin() * d2),
+                    ],
+                    egui::Stroke::new((s * 0.045).max(1.4), sun),
+                );
+            }
+        }
+    };
+    let cloud_at = |pp: &egui::Painter, base: egui::Pos2, cw: f32| {
+        let rr = cw * 0.26;
+        pp.circle_filled(egui::pos2(base.x - cw * 0.22, base.y), rr, cloud);
+        pp.circle_filled(egui::pos2(base.x + cw * 0.02, base.y - rr * 0.55), rr * 1.18, cloud);
+        pp.circle_filled(egui::pos2(base.x + cw * 0.24, base.y), rr * 0.92, cloud);
+        pp.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(base.x - cw * 0.24, base.y), egui::pos2(base.x + cw * 0.26, base.y + rr)),
+            rr,
+            cloud,
+        );
+    };
+
+    match sky {
+        Sky::Sun => sun_at(p, c, s * 0.30, true),
+        Sky::Partly => {
+            sun_at(p, egui::pos2(c.x - s * 0.14, c.y - s * 0.16), s * 0.20, true);
+            cloud_at(p, egui::pos2(c.x + s * 0.06, c.y + s * 0.14), s * 0.92);
+        }
+        Sky::Cloud => cloud_at(p, egui::pos2(c.x, c.y + s * 0.10), s),
+        Sky::Rain => {
+            cloud_at(p, egui::pos2(c.x, c.y - s * 0.10), s * 0.92);
+            for i in 0..3 {
+                let bx = c.x - s * 0.26 + i as f32 * s * 0.26;
+                let ph = (t as f32 * 1.7 + i as f32 * 0.55) % 1.0;
+                let by = c.y + s * 0.20 + ph * s * 0.42;
+                p.line_segment(
+                    [egui::pos2(bx, by), egui::pos2(bx - s * 0.05, by + s * 0.16)],
+                    egui::Stroke::new((s * 0.045).max(1.3), rain),
+                );
+            }
+        }
+        Sky::Thunder => {
+            cloud_at(p, egui::pos2(c.x, c.y - s * 0.12), s * 0.92);
+            let bx = c.x;
+            let by = c.y + s * 0.06;
+            p.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(bx - s * 0.07, by),
+                    egui::pos2(bx + s * 0.09, by),
+                    egui::pos2(bx - s * 0.01, by + s * 0.20),
+                ],
+                bolt,
+                egui::Stroke::NONE,
+            ));
+            p.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(bx - s * 0.01, by + s * 0.18),
+                    egui::pos2(bx + s * 0.13, by + s * 0.13),
+                    egui::pos2(bx - s * 0.03, by + s * 0.40),
+                ],
+                bolt,
+                egui::Stroke::NONE,
+            ));
+        }
+        Sky::Snow => {
+            cloud_at(p, egui::pos2(c.x, c.y - s * 0.12), s * 0.92);
+            for i in 0..3 {
+                let bx = c.x - s * 0.26 + i as f32 * s * 0.26;
+                let ph = (t as f32 * 0.7 + i as f32 * 0.33) % 1.0;
+                let by = c.y + s * 0.20 + ph * s * 0.38;
+                p.circle_filled(egui::pos2(bx, by), (s * 0.035).max(1.4), snow);
+            }
+        }
+        Sky::Fog => {
+            cloud_at(p, egui::pos2(c.x, c.y - s * 0.22), s * 0.90);
+            for i in 0..3 {
+                let off = (t as f32 * 0.6 + i as f32 * 0.33).sin() * s * 0.06;
+                let yy = c.y + s * 0.14 + i as f32 * s * 0.13;
+                p.line_segment(
+                    [egui::pos2(c.x - s * 0.34 + off, yy), egui::pos2(c.x + s * 0.30 + off, yy)],
+                    egui::Stroke::new((s * 0.05).max(1.5), fogc),
+                );
+            }
+        }
+        Sky::Night => {
+            let mar = s * 0.30;
+            p.circle_filled(egui::pos2(c.x + s * 0.03, c.y), mar, moon);
+            p.circle_filled(egui::pos2(c.x + s * 0.17, c.y - s * 0.09), mar * 0.92, bg);
+            for i in 0..3 {
+                let tw = ((t as f32 * 2.0 + i as f32 * 1.3).sin() * 0.5 + 0.5) as f32;
+                let sx = c.x - s * 0.26 + i as f32 * s * 0.24;
+                let sy = c.y - s * 0.24 + (i % 2) as f32 * s * 0.14;
+                let col = egui::Color32::from_rgba_unmultiplied(226, 233, 245, (tw * 200.0 * (a as f32 / 255.0)) as u8);
+                p.circle_filled(egui::pos2(sx, sy), (s * 0.02).max(0.9), col);
+            }
         }
     }
 }
@@ -4417,6 +6690,7 @@ fn main() -> eframe::Result<()> {
             .with_always_on_top()
             .with_taskbar(false)
             .with_active(false),
+        multisampling: 4,
         ..Default::default()
     };
     eframe::run_native(
@@ -4436,3 +6710,4 @@ fn make_tex(ctx: &egui::Context, name: &str, bytes: &'static [u8], w: usize, h: 
     let img = egui::ColorImage::from_rgba_unmultiplied([w, h], bytes);
     ctx.load_texture(name, img, egui::TextureOptions::LINEAR)
 }
+

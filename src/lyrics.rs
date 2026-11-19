@@ -20,6 +20,29 @@ pub struct LrcLine {
     pub segs: Vec<Seg>, // 逐字时间（来自 yrc）；为空表示只有整行时间
 }
 
+/// 纯音乐占位文案：歌词源只给出“纯音乐，请欣赏”这类“整首无人声歌词”的标记时，
+/// 用它作为展示歌词（收起态、展开态都显示这一句，而不是“暂无歌词”）。
+pub const INSTRUMENTAL_TEXT: &str = "纯音乐，请欣赏";
+
+/// 判断一段歌词原文是否为「纯音乐 / 请欣赏」占位（网易云、QQ、汽水都常用这两个词标记整首纯音乐）。
+pub fn looks_instrumental(raw: &str) -> bool {
+    raw.contains("纯音乐") || raw.contains("请欣赏")
+}
+
+/// 构造「纯音乐」占位歌词（单行、时间 0，便于统一走现有的歌词展示逻辑）。
+pub fn instrumental_line() -> Vec<LrcLine> {
+    vec![LrcLine {
+        t: 0.0,
+        text: INSTRUMENTAL_TEXT.to_string(),
+        segs: Vec::new(),
+    }]
+}
+
+/// 判断一组歌词是否为「纯音乐」占位（全部行都是“纯音乐/请欣赏”标记）。
+pub fn is_instrumental(lines: &[LrcLine]) -> bool {
+    !lines.is_empty() && lines.iter().all(|l| looks_instrumental(&l.text))
+}
+
 fn dlog(s: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -373,6 +396,10 @@ fn qq_fetch(title: &str, artist: &str) -> Option<Vec<LrcLine>> {
     if lyr.trim().is_empty() {
         return None;
     }
+    // QQ 音乐对整首无词曲目会返回“纯音乐，请欣赏”标记：作为占位歌词。
+    if looks_instrumental(lyr) {
+        return Some(instrumental_line());
+    }
     let l = filt(parse_lrc(lyr));
     if l.len() >= 2 {
         dlog(&format!("qq lyric mid={} lines={}", mid, l.len()));
@@ -473,6 +500,12 @@ pub fn fetch_full(
         let yp = d.join(format!("{}.yrc", key));
         let cp = d.join(format!("{}.cover", key));
         let np = d.join(format!("{}.nolyric", key));
+        // 纯音乐占位缓存：歌词源只给“纯音乐，请欣赏”时，写这个标记（不写 .lrc，避免被 is_noise 过滤掉）。
+        let purep = d.join(format!("{}.pure", key));
+        let cached_pure = std::fs::read_to_string(&purep)
+            .ok()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
         // 负缓存：之前确认过“确实没有歌词”（网易云/QQ/LRCLIB 都没有），6 小时内不再重复联网。
         let no_recent = std::fs::metadata(&np)
             .ok()
@@ -495,7 +528,9 @@ pub fn fetch_full(
         // 记住这首读成功过，下次直接命中（不必每次都让汽水重新渲染歌词页）。
         // 绝不读取任何网络来源的 .lrc/.yrc 缓存（避免历史错配又被读出来）。
         let soda_cache = d.join(format!("{}.soda.lrc", key));
-        let cached_lines = if soda {
+        let cached_lines = if cached_pure {
+            Some(instrumental_line())
+        } else if soda {
             std::fs::read_to_string(&soda_cache)
                 .ok()
                 .map(|s| filt(parse_lrc(&s)))
@@ -524,19 +559,33 @@ pub fn fetch_full(
             }
             // 缓存不全则继续联网补齐（保留已有部分）
             let (l2, c2) = fetch_remote(title, artist, expected_dur, &key, dir.as_ref(), soda);
-            if l2.is_none() && !soda {
-                let _ = std::fs::write(&np, b"1");
+            match &l2 {
+                Some(v) if is_instrumental(v) => {
+                    let _ = std::fs::write(&purep, INSTRUMENTAL_TEXT.as_bytes());
+                    if !soda {
+                        let _ = std::fs::remove_file(&np);
+                    }
+                }
+                None if !soda => {
+                    let _ = std::fs::write(&np, b"1");
+                }
+                _ => {}
             }
             return (l2.or(cached_lines), c2.or(cached_cover));
         }
     }
     let (l, c) = fetch_remote(title, artist, expected_dur, &key, dir.as_ref(), soda);
-    if l.is_none() {
-        // 汽水不写“无歌词”负缓存：歌词可能只是还没加载，下次播放应重新读内存。
-        if let Some(d) = &dir {
-            if !soda {
-                let _ = std::fs::write(d.join(format!("{}.nolyric", key)), b"1");
+    if let Some(d) = &dir {
+        if let Some(v) = &l {
+            if is_instrumental(v) {
+                let _ = std::fs::write(d.join(format!("{}.pure", key)), INSTRUMENTAL_TEXT.as_bytes());
+                if !soda {
+                    let _ = std::fs::remove_file(d.join(format!("{}.nolyric", key)));
+                }
             }
+        } else if !soda {
+            // 汽水不写“无歌词”负缓存：歌词可能只是还没加载，下次播放应重新读内存。
+            let _ = std::fs::write(d.join(format!("{}.nolyric", key)), b"1");
         }
     }
     (l, c)
@@ -556,6 +605,19 @@ fn fetch_remote(
         // 汽水歌曲：歌词只认汽水自己的官方数据，绝不跨源适配，从根上杜绝“把别首歌贴上来”。
         // 首选：通过 CDP 读渲染进程里 LyricsView 的官方歌词（含逐字时间，不需要显示歌词页）。
         if let Some(sl) = crate::cdp_lyric::fetch_current(title, artist) {
+            let cover = if !sl.cover.is_empty() {
+                get_bytes(&sl.cover)
+            } else {
+                None
+            };
+            if let (Some(d), Some(c)) = (dir, cover.as_ref()) {
+                let _ = std::fs::write(d.join(format!("{}.cover", key)), c);
+            }
+            // 纯音乐（歌词正文只有“纯音乐，请欣赏”之类）：返回占位，收起/展开都显示这句话。
+            if looks_instrumental(&sl.content) {
+                dlog(&format!("soda instrumental {} - {}", sl.name, sl.artist));
+                return (Some(instrumental_line()), cover);
+            }
             let l = crate::cdp_lyric::parse_content(&sl.content);
             if l.len() >= 2 {
                 dlog(&format!(
@@ -572,14 +634,6 @@ fn fetch_remote(
                         .collect();
                     let _ = std::fs::write(d.join(format!("{}.soda.lrc", key)), body);
                 }
-                let cover = if !sl.cover.is_empty() {
-                    get_bytes(&sl.cover)
-                } else {
-                    None
-                };
-                if let (Some(d), Some(c)) = (dir, cover.as_ref()) {
-                    let _ = std::fs::write(d.join(format!("{}.cover", key)), c);
-                }
                 return (Some(l), cover);
             }
         }
@@ -587,12 +641,15 @@ fn fetch_remote(
         if let Some(l) = soda_read_with_retry(title, artist, expected_dur) {
             dlog(&format!("soda lyric {} - {} lines={}", title, artist, l.len()));
             // 记住「这首从汽水内存成功读到过官方歌词」，写成 {key}.soda.lrc，下次直接命中。
+            // 纯音乐占位不写 .soda.lrc（读回会被 is_noise 过滤），由上层写 .pure 标记。
             if let Some(d) = dir {
-                let body: String = l
-                    .iter()
-                    .map(|x| format!("[{:02}:{:05.2}]{}\n", (x.t as u32) / 60, x.t % 60.0, x.text))
-                    .collect();
-                let _ = std::fs::write(d.join(format!("{}.soda.lrc", key)), body);
+                if !is_instrumental(&l) {
+                    let body: String = l
+                        .iter()
+                        .map(|x| format!("[{:02}:{:05.2}]{}\n", (x.t as u32) / 60, x.t % 60.0, x.text))
+                        .collect();
+                    let _ = std::fs::write(d.join(format!("{}.soda.lrc", key)), body);
+                }
             }
             let cover: Option<Vec<u8>> = None;
             return (Some(l), cover);
@@ -679,6 +736,9 @@ fn fetch_remote_net(
     let mut chosen_id: Option<i64> = None;
     let mut chosen_yrc: Option<String> = None;
     let mut chosen_dur: f64 = 0.0;
+    // 记录最近一个“强匹配候选”的歌词正文只是“纯音乐，请欣赏”标记的版本（整首无人声歌词）。
+    // 只有在所有候选都拿不到真实歌词时，才用它作为占位歌词展示。
+    let mut instrumental: Option<(i64, f64)> = None;
     // 第一轮：在强匹配候选里优先找“带逐字(yrc)”的版本（同名歌曲不同上传，有的有 yrc）
     for &ci in idxs.iter().take(12) {
         let (sc, id, _cd) = cands[ci];
@@ -692,6 +752,9 @@ fn fetch_remote_net(
         if let Some(lj) = get_json(&lurl) {
             let yrc_txt = lj.get("yrc").and_then(|v| v.get("lyric")).and_then(|v| v.as_str()).unwrap_or("");
             if !yrc_txt.trim().is_empty() {
+                if sc >= 10 && instrumental.is_none() && looks_instrumental(yrc_txt) {
+                    instrumental = Some((id, _cd));
+                }
                 let l = filt(parse_yrc(yrc_txt));
                 let bad = l.iter().any(|x| x.text.contains("暂无歌词") || x.text.contains("纯音乐"));
                 if l.len() >= 2 && !bad {
@@ -717,6 +780,9 @@ fn fetch_remote_net(
             let lurl = format!("https://music.163.com/api/song/lyric?id={}&lv=-1&kv=-1&tv=-1", id);
             if let Some(lj) = get_json(&lurl) {
                 if let Some(lrc) = lj.get("lrc").and_then(|v| v.get("lyric")).and_then(|v| v.as_str()) {
+                    if sc >= 10 && instrumental.is_none() && looks_instrumental(lrc) {
+                        instrumental = Some((id, _cd));
+                    }
                     let l = filt(parse_lrc(lrc));
                     let bad = l.iter().any(|x| x.text.contains("暂无歌词") || x.text.contains("纯音乐"));
                     if l.len() >= 2 && !bad {
@@ -728,6 +794,16 @@ fn fetch_remote_net(
                     }
                 }
             }
+        }
+    }
+
+    // 网易云明确标注“纯音乐，请欣赏”但没有任何真实歌词行：用占位歌词展示（收起/展开都显示这句话）。
+    if lines.is_none() {
+        if let Some((id, cd)) = instrumental {
+            dlog(&format!("netease instrumental id={} {} - {}", id, title, artist));
+            lines = Some(instrumental_line());
+            chosen_id = Some(id);
+            chosen_dur = cd;
         }
     }
 
@@ -796,8 +872,10 @@ fn fetch_remote_net(
             let _ = std::fs::write(d.join(format!("{}.yrc", key)), y);
         }
         if let Some(l) = &lines {
-            let body: String = l.iter().map(|x| format!("[{:02}:{:05.2}]{}\n", (x.t as u32) / 60, x.t % 60.0, x.text)).collect();
-            let _ = std::fs::write(d.join(format!("{}.lrc", key)), body);
+            if !is_instrumental(l) {
+                let body: String = l.iter().map(|x| format!("[{:02}:{:05.2}]{}\n", (x.t as u32) / 60, x.t % 60.0, x.text)).collect();
+                let _ = std::fs::write(d.join(format!("{}.lrc", key)), body);
+            }
         }
         if let Some(c) = &cover {
             if c.len() > 1000 {
@@ -934,5 +1012,39 @@ mod probes {
             l.as_ref().and_then(|v| v.first().map(|x| x.text.clone())).unwrap_or_default(),
             l.as_ref().and_then(|v| v.last().map(|x| x.t)).unwrap_or(0.0)
         );
+    }
+}
+
+#[cfg(test)]
+mod instrumental_tests {
+    use super::*;
+
+    #[test]
+    fn looks_instrumental_detects_markers() {
+        assert!(looks_instrumental("纯音乐，请欣赏"));
+        assert!(looks_instrumental("纯音乐"));
+        assert!(looks_instrumental("此歌曲为没有填词的纯音乐，请您欣赏"));
+        assert!(!looks_instrumental("作词 : 林夕"));
+        assert!(!looks_instrumental(""));
+    }
+
+    #[test]
+    fn instrumental_line_is_single_placeholder() {
+        let l = instrumental_line();
+        assert_eq!(l.len(), 1);
+        assert_eq!(l[0].text, INSTRUMENTAL_TEXT);
+        assert_eq!(l[0].t, 0.0);
+        assert!(l[0].segs.is_empty());
+    }
+
+    #[test]
+    fn is_instrumental_only_for_all_placeholder_lines() {
+        assert!(is_instrumental(&instrumental_line()));
+        assert!(!is_instrumental(&[]));
+        let real = vec![
+            LrcLine { t: 1.0, text: "第一句歌词".to_string(), segs: Vec::new() },
+            LrcLine { t: 3.0, text: "第二句歌词".to_string(), segs: Vec::new() },
+        ];
+        assert!(!is_instrumental(&real));
     }
 }

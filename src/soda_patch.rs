@@ -18,6 +18,7 @@
 use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -457,6 +458,10 @@ pub fn restart_soda() -> Result<(), String> {
 /// 设置页「汽水连接」行的「一键修复」：后台线程里 关闭汽水 → 重打补丁 → 重新拉起。
 /// 不阻塞 UI；状态缓存 3 秒后会自然刷新。
 pub fn spawn_repair() -> Result<(), String> {
+    if patch_disabled() {
+        dlog("manual repair skipped: auto-patch disabled by user");
+        return Ok(());
+    }
     std::thread::spawn(|| {
         dlog("manual repair: start");
         if soda_running() {
@@ -485,41 +490,36 @@ pub fn spawn_repair() -> Result<(), String> {
     Ok(())
 }
 
-/// 启动时调用一次：确保补丁可用。汽水在运行但补丁缺失时，自动重启一次把它补好；
-/// 若补丁已在、只是 CDP 还没热起来，则不动它（留给 tick 处理）。
+/// 启动时调用一次：**不打扰用户**地确保补丁可用。
+/// 只在汽水未运行时（离线）补丁；汽水正在运行时绝不关闭/重启它，也绝不移动它的窗口。
 pub fn boot_check() {
-    if !soda_running() {
-        match ensure_patched() {
-            Ok(true) => dlog("boot: soda patch applied (not running)"),
-            _ => {}
-        }
+    // 启动自愈：仅还原 WinIsle 自己曾经留下的“屏幕外”主窗（精确句柄），不碰其它窗口。
+    if soda_running() && ensure_soda_reachable() {
+        dlog("boot: restored soda window from off-screen leftovers");
+    }
+    if patch_disabled() {
+        dlog("boot: auto-patch disabled by user; skip");
         return;
     }
-    let patched = find_asar().map(|a| inspect(&a).map(|x| x.0).unwrap_or(false)).unwrap_or(false);
-    if patched {
+    if soda_running() {
+        // 用户正在使用汽水：什么都不做，绝不为打补丁而重启它。
+        dlog("boot: soda running; leave untouched (no auto restart)");
         return;
     }
-    let _ = std::process::Command::new("taskkill").args(["/IM", "SodaMusic.exe", "/F"]).status();
-    std::thread::sleep(Duration::from_millis(1500));
+    // 汽水未运行：可安全地离线打补丁，用户下次打开就是已打补丁版本。
     match ensure_patched() {
-        Ok(true) => dlog("boot: soda patch applied after stopping SodaMusic"),
-        Ok(false) => dlog("boot: already patched after stop"),
-        Err(e) => { dlog(&format!("boot: soda patch failed: {e}")); return; }
-    }
-    match launch_soda() {
-        Ok(()) => dlog("boot: soda relaunched with CDP patch"),
-        Err(e) => dlog(&format!("boot: soda relaunch failed: {e}")),
+        Ok(true) => dlog("boot: soda patch applied (offline, not running)"),
+        Ok(false) => {}
+        Err(e) => dlog(&format!("boot: soda patch failed (offline): {e}")),
     }
 }
-/// 供主循环调用：节流执行「检查 + 补丁 + 必要时重启」。
-///
-/// 汽水运行时会**独占锁定 app.asar**，所以补丁只能在汽水关闭时写。因此策略是：
-/// - 未打补丁：若汽水在跑 → 关掉它 → 打补丁 → 重新拉起（一次更新后最多打断这一次）；
-/// - 已打补丁但 CDP 不通（通常是刚打补丁还没重启）→ 未在播放时重启让它生效；
-/// 播放中则等暂停后再重启，避免正听着被打断。
-pub fn tick(playing: bool) {
+/// 供主循环调用：**非侵入式**自愈——只在汽水未运行时离线补丁，
+/// 绝不关闭/重启/移动用户正在使用的汽水窗口。
+pub fn tick(_playing: bool) {
+    if patch_disabled() {
+        return;
+    }
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
-    static LAST_RESTART: Mutex<Option<Instant>> = Mutex::new(None);
     let now = Instant::now();
     {
         let mut last = LAST.lock().unwrap();
@@ -530,6 +530,10 @@ pub fn tick(playing: bool) {
         }
         *last = Some(now);
     }
+    // 用户正在使用汽水：完全不碰。
+    if soda_running() {
+        return;
+    }
     if cdp_up() {
         return;
     }
@@ -537,75 +541,13 @@ pub fn tick(playing: bool) {
         Some(a) => inspect(&a).map(|x| x.0).unwrap_or(false),
         None => return,
     };
-
-    // 冷却：避免反复重启。
-    let mut cooldown_ok = || {
-        let mut lr = LAST_RESTART.lock().unwrap();
-        if let Some(t) = *lr {
-            if now.duration_since(t) < Duration::from_secs(300) {
-                return false;
-            }
-        }
-        *lr = Some(now);
-        true
-    };
-
-    if !patched {
-        if soda_running() {
-            if !cooldown_ok() {
-                return;
-            }
-            // 必须先关汽水，asar 被独占锁时才能写入补丁。
-            let _ = std::process::Command::new("taskkill")
-                .args(["/IM", "SodaMusic.exe", "/F"])
-                .status();
-            std::thread::sleep(Duration::from_millis(1500));
-            match ensure_patched() {
-                Ok(true) => dlog("soda patch applied after stopping SodaMusic"),
-                Ok(false) => dlog("soda patch: already patched after stop"),
-                Err(e) => {
-                    dlog(&format!("soda patch failed after stop: {e}"));
-                    return;
-                }
-            }
-            match launch_soda() {
-                Ok(()) => dlog("soda launched to activate CDP patch"),
-                Err(e) => dlog(&format!("soda relaunch failed: {e}")),
-            }
-        } else {
-            match ensure_patched() {
-                Ok(true) => dlog("soda patch applied (SodaMusic not running)"),
-                Ok(false) => {}
-                Err(e) => dlog(&format!("soda patch failed: {e}")),
-            }
-        }
+    if patched {
         return;
     }
-
-    // 已打补丁但 CDP 仍不通：多半是打补丁后还没重启汽水，或渲染进程崩了。
-    if soda_running() {
-        static DOWN_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
-        if playing {
-            // 播放中一般先不打断；但如果 CDP 持续 60s 都不通，说明确实坏了，强制重启一次自愈。
-            let mut d = DOWN_SINCE.lock().unwrap();
-            let since = *d.get_or_insert(now);
-            if now.duration_since(since) >= Duration::from_secs(60) && cooldown_ok() {
-                let _ = restart_soda();
-                *d = None;
-                dlog("soda CDP down >60s while playing: force restarted");
-            } else {
-                dlog("soda patched; CDP down, will retry/restart after playback pauses");
-            }
-            return;
-        }
-        *DOWN_SINCE.lock().unwrap() = None;
-        if !cooldown_ok() {
-            return;
-        }
-        match restart_soda() {
-            Ok(()) => dlog("soda restarted to activate CDP patch"),
-            Err(e) => dlog(&format!("soda restart failed: {e}")),
-        }
+    match ensure_patched() {
+        Ok(true) => dlog("soda patch applied offline (not running)"),
+        Ok(false) => {}
+        Err(e) => dlog(&format!("soda patch failed offline: {e}")),
     }
 }
 
@@ -764,13 +706,19 @@ mod tests {
 }
 
 static OFFSCREEN_SAVED: Mutex<Option<(isize, i32, i32, i32, i32, isize)>> = Mutex::new(None);
+/// 「正在把汽水窗临时移到屏幕外取歌词」期间为 true，防止看门狗把窗口中途拉回来。
+static OFFSCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+fn saved_rect_path() -> PathBuf {
+    crate::paths::file("soda_win_rect.txt")
+}
 
 pub fn show_soda_offscreen() -> bool {
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetWindowLongPtrW, SetWindowPos,
-        ShowWindow, GWL_EXSTYLE, HWND_TOP, SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN, SWP_NOACTIVATE,
+        ShowWindow, GWL_EXSTYLE, HWND_TOP, SM_XVIRTUALSCREEN, SWP_NOACTIVATE,
         SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     };
     struct Ctx<'a> { pids: &'a [u32], found: Option<HWND> }
@@ -786,6 +734,11 @@ pub fn show_soda_offscreen() -> bool {
     }
     let pids = crate::soda_lyrics::soda_pids();
     if pids.is_empty() { return false; }
+    // 关键安全闸门：只有 CDP 真正可用（补丁已加载、9222 端口在线）时才允许移动汽水窗口。
+    // 补丁被禁用/未加载时绝不碰窗口，避免把用户正在用的客户端搞乱。
+    if !cdp_up() { return false; }
+    // 清理可能残留的“移窗中”标记（极少数上次移窗后未能复位的异常），避免看门狗被永久停用。
+    OFFSCREEN_ACTIVE.store(false, Ordering::SeqCst);
     let mut ctx = Ctx { pids: &pids, found: None };
     unsafe { let _ = EnumWindows(Some(cb), LPARAM(&mut ctx as *mut _ as isize)); }
     let hwnd = match ctx.found { Some(h) => h, None => return false };
@@ -801,6 +754,17 @@ pub fn show_soda_offscreen() -> bool {
         if let Ok(mut s) = OFFSCREEN_SAVED.lock() {
             *s = Some((hwnd.0 as isize, r.left, r.top, w, h, old_style));
         }
+        // 持久化原始位置/尺寸/样式/句柄：万一 WinIsle 在“移到屏幕外”期间被结束
+        //（更新/崩溃），内存里的 OFFSCREEN_SAVED 会丢失，下次启动据此精确还原（含窗口样式）。
+        let _ = std::fs::write(
+            saved_rect_path(),
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                hwnd.0 as isize, r.left, r.top, w, h, old_style
+            ),
+        );
+        // 标记“正在移窗”，让看门狗此时不要来抢窗口
+        OFFSCREEN_ACTIVE.store(true, Ordering::SeqCst);
         // 从任务栏/Alt-Tab 隐藏，并禁止激活
         let new_style = old_style
             | (WS_EX_TOOLWINDOW.0 as isize)
@@ -808,8 +772,6 @@ pub fn show_soda_offscreen() -> bool {
         let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
         // 放到所有显示器左侧之外的虚拟区域，确保任何多屏布局都不可见
         let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-        let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-        let _ = vw;
         let left_x = vx - w - 80;
         let _ = SetWindowPos(hwnd, HWND_TOP, left_x, 0, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -821,7 +783,7 @@ pub fn hide_soda_windows() {
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, SetWindowLongPtrW, SetWindowPos,
-        ShowWindow, GWL_EXSTYLE, HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+        ShowWindow, GWL_EXSTYLE, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE,
     };
     struct Ctx<'a> { pids: &'a [u32] }
     unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
@@ -834,9 +796,10 @@ pub fn hide_soda_windows() {
         BOOL(1)
     }
     let pids = crate::soda_lyrics::soda_pids();
-    if pids.is_empty() { return; }
-    let mut ctx = Ctx { pids: &pids };
-    unsafe { let _ = EnumWindows(Some(cb), LPARAM(&mut ctx as *mut _ as isize)); }
+    if !pids.is_empty() {
+        let mut ctx = Ctx { pids: &pids };
+        unsafe { let _ = EnumWindows(Some(cb), LPARAM(&mut ctx as *mut _ as isize)); }
+    }
     if let Ok(mut s) = OFFSCREEN_SAVED.lock() {
         if let Some((hw, ox, oy, ow, oh, old_style)) = s.take() {
             let h = HWND(hw as *mut _);
@@ -847,4 +810,73 @@ pub fn hide_soda_windows() {
             }
         }
     }
+    // 正常还原完成，解除“移窗中”标记并清除持久化位置标记。
+    OFFSCREEN_ACTIVE.store(false, Ordering::SeqCst);
+    let _ = std::fs::remove_file(saved_rect_path());
+}
+
+/// 保守自愈：**只**按 `soda_win_rect.txt` 里记录的【精确窗口句柄】还原那一个窗口，
+/// 绝不枚举 / 显示 / 缩放任何其它窗口。用于 WinIsle 在“移窗取词”期间被结束时留下的残留。
+/// 只有当该句柄仍然存在、仍属于汽水进程、且确实完全落在虚拟桌面之外时才动手；
+/// 否则一律清除记录、什么都不做。这样绝不会误伤用户正常使用中的窗口。
+pub fn ensure_soda_reachable() -> bool {
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, GetWindowRect, GetWindowThreadProcessId, IsWindow, SetWindowLongPtrW,
+        SetWindowPos, GWL_EXSTYLE, HWND_TOP, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOZORDER,
+    };
+    if OFFSCREEN_ACTIVE.load(Ordering::SeqCst) {
+        return false;
+    }
+    let t = match std::fs::read_to_string(saved_rect_path()) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let nums: Vec<i64> = t.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+    if nums.len() < 6 {
+        let _ = std::fs::remove_file(saved_rect_path());
+        return false;
+    }
+    let hwnd = HWND(nums[0] as *mut core::ffi::c_void);
+    let (ox, oy, ow, oh, st) = (
+        nums[1] as i32,
+        nums[2] as i32,
+        nums[3] as i32,
+        nums[4] as i32,
+        nums[5] as isize,
+    );
+    unsafe {
+        // 句柄可能已被系统回收复用：必须仍属于汽水进程，否则绝不动它。
+        if !IsWindow(hwnd).as_bool() {
+            let _ = std::fs::remove_file(saved_rect_path());
+            return false;
+        }
+        let mut pid = 0u32;
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if !crate::soda_lyrics::soda_pids().contains(&pid) {
+            let _ = std::fs::remove_file(saved_rect_path());
+            return false;
+        }
+        // 只有在“完全落在虚拟桌面之外”时才还原；正常可见/最小化窗口一律不碰。
+        let mut r = RECT::default();
+        if GetWindowRect(hwnd, &mut r).is_err() {
+            let _ = std::fs::remove_file(saved_rect_path());
+            return false;
+        }
+        let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        let offscreen = r.right <= vx || r.left >= vx + vw || r.bottom <= vy || r.top >= vy + vh;
+        if !offscreen {
+            let _ = std::fs::remove_file(saved_rect_path());
+            return false;
+        }
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, st);
+        let _ = SetWindowPos(hwnd, HWND_TOP, ox, oy, ow, oh, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    dlog("restored soda main window from saved off-screen rect");
+    let _ = std::fs::remove_file(saved_rect_path());
+    true
 }

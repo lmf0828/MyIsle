@@ -57,6 +57,8 @@ extern "system" {
     fn GetSystemMetrics(nIndex: i32) -> i32;
     fn GetDpiForWindow(hwnd: HWND) -> u32;
     fn ShowWindow(hwnd: HWND, nCmdShow: i32) -> i32;
+    fn SetTimer(hWnd: HWND, nIDEvent: usize, uElapse: u32, lpTimerFunc: usize) -> usize;
+    fn KillTimer(hWnd: HWND, uIDEvent: usize) -> i32;
 }
 
 #[link(name = "dwmapi")]
@@ -91,6 +93,7 @@ const GWL_EXSTYLE: i32 = -20;
 const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
 const WS_EX_NOACTIVATE: isize = 0x0800_0000;
 const WS_EX_TRANSPARENT: isize = 0x0000_0020;
+const WS_EX_LAYERED: isize = 0x0008_0000;
 
 const HWND_TOPMOST: HWND = -1;
 const SWP_NOSIZE: u32 = 0x0001;
@@ -119,10 +122,25 @@ pub struct RECT {
     pub bottom: i32,
 }
 
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct MONITORINFO {
+    pub cbSize: u32,
+    pub rcMonitor: RECT,
+    pub rcWork: RECT,
+    pub dwFlags: u32,
+}
+
+// MonitorFromPoint / MonitorFromWindow 的标志位
+const MONITOR_DEFAULTTONEAREST: u32 = 2;
+
 #[link(name = "user32")]
 extern "system" {
     fn GetCursorPos(p: *mut POINT) -> i32;
     fn GetWindowRect(h: HWND, r: *mut RECT) -> i32;
+    fn MonitorFromPoint(pt: POINT, dwFlags: u32) -> isize;
+    fn MonitorFromWindow(hwnd: HWND, dwFlags: u32) -> isize;
+    fn GetMonitorInfoW(hMonitor: isize, lpmi: *mut MONITORINFO) -> i32;
     fn GetAsyncKeyState(vkey: i32) -> i16;
     fn CallWindowProcW(prev: isize, h: HWND, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn SetCapture(h: HWND) -> HWND;
@@ -163,9 +181,31 @@ const WM_ERASEBKGND: u32 = 0x0014;
 const WM_MOUSEACTIVATE: u32 = 0x0021;
 const WM_NCACTIVATE: u32 = 0x0086;
 const MA_NOACTIVATE: isize = 3;
+const MA_ACTIVATE: isize = 1;
 const HTCLIENT: isize = 1;
 const HTTRANSPARENT: isize = -1;
 const VK_LBUTTON: i32 = 0x01;
+
+// 动态整窗鼠标穿透：WS_EX_TRANSPARENT 使窗口对鼠标完全透明（点击落到下方窗口，跨进程有效）。
+// 通过定时器按光标是否落在岛体/面板矩形内来开关，从而“岛体可交互、透明边距可穿透”。
+// 注意：WS_EX_TRANSPARENT 常量已在文件上部定义（见上方）。
+const WM_TIMER: u32 = 0x0113;
+const CLICK_TIMER_ID: usize = 0x0B15;
+const CLICK_TIMER_MS: u32 = 8;
+
+/// 是否允许本窗口被点击激活（仅在需要键盘输入的搜索页临时打开）。
+static ACTIVATABLE: AtomicI32 = AtomicI32::new(0);
+
+/// 穿透轮询线程是否已启动（保证只启动一次）。
+static CLICK_POLL_STARTED: AtomicI32 = AtomicI32::new(0);
+
+/// 是否正在拖动岛体（由 UI 线程每帧写入）。拖动期间需保持窗口可交互，即使光标离开岛体。
+static DRAGGING: AtomicI32 = AtomicI32::new(0);
+
+/// 设置“正在拖动”状态（由主线程调用）。
+pub fn set_dragging(on: bool) {
+    DRAGGING.store(on as i32, Ordering::Relaxed);
+}
 
 /// 每帧更新"岛体"命中矩形（物理像素，窗口内相对坐标）。
 pub fn set_hit_pill(l: i32, t: i32, r: i32, b: i32) {
@@ -176,37 +216,29 @@ pub fn set_hit_pill(l: i32, t: i32, r: i32, b: i32) {
     HIT_ON.store(1, Ordering::Relaxed);
 }
 
-unsafe extern "system" fn hit_wndproc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) -> isize {
-    if msg == WM_NCHITTEST && HIT_ON.load(Ordering::Relaxed) != 0 {
-        let mut p = POINT::default();
-        GetCursorPos(&mut p);
-        let mut rc = RECT::default();
-        GetWindowRect(hwnd, &mut rc);
-        let lx = p.x - rc.left;
-        let ly = p.y - rc.top;
-        let (l, t, r, b) = (
-            HIT_L.load(Ordering::Relaxed),
-            HIT_T.load(Ordering::Relaxed),
-            HIT_R.load(Ordering::Relaxed),
-            HIT_B.load(Ordering::Relaxed),
-        );
-        if lx >= l && lx <= r && ly >= t && ly <= b {
-            return HTCLIENT;
-        }
-        return HTTRANSPARENT;
+/// 判断给定屏幕物理点 (px,py) 是否落在“岛体/面板”命中矩形内。
+unsafe fn hit_contains(hwnd: HWND, px: i32, py: i32) -> bool {
+    if HIT_ON.load(Ordering::Relaxed) == 0 {
+        return false;
     }
-    CallWindowProcW(ORIG_WNDPROC, hwnd, msg, wparam, lparam)
+    let mut rc = RECT::default();
+    GetWindowRect(hwnd, &mut rc);
+    let lx = px - rc.left;
+    let ly = py - rc.top;
+    let (l, t, r, b) = (
+        HIT_L.load(Ordering::Relaxed),
+        HIT_T.load(Ordering::Relaxed),
+        HIT_R.load(Ordering::Relaxed),
+        HIT_B.load(Ordering::Relaxed),
+    );
+    lx >= l && lx <= r && ly >= t && ly <= b
 }
 
-/// 安装命中测试子类：岛体可交互，透明边距穿透。
-pub fn install_hit_test(hwnd: HWND) {
-    if hwnd == 0 {
-        return;
-    }
-    unsafe {
-        let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, hit_wndproc as *const () as usize as isize);
-        ORIG_WNDPROC = prev;
-    }
+/// 光标当前是否落在“岛体/面板”命中矩形内（物理像素、窗口内相对坐标）。
+unsafe fn cursor_inside_pill(hwnd: HWND) -> bool {
+    let mut p = POINT::default();
+    GetCursorPos(&mut p);
+    hit_contains(hwnd, p.x, p.y)
 }
 
 static mut ORIG_ERASE: isize = 0;
@@ -224,9 +256,22 @@ unsafe fn dark_brush() -> isize {
 }
 
 unsafe extern "system" fn erase_wndproc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) -> isize {
+    // 命中测试（兜底）：岛体/面板内返回 HTCLIENT 可交互；其余返回 HTTRANSPARENT。
+    // 真正的整窗跨进程穿透由后台 8ms 轮询线程通过 WS_EX_TRANSPARENT 开关（见 start_click_through_poller）。
+    if msg == WM_NCHITTEST && HIT_ON.load(Ordering::Relaxed) != 0 {
+        if cursor_inside_pill(hwnd) {
+            return HTCLIENT;
+        }
+        return HTTRANSPARENT;
+    }
     // 点击时不要让窗口被激活——否则 Windows 会为"活动窗口"画一圈高亮边框（偶发白边的来源）。
+    // 例外：城市搜索页需要键盘输入，此时允许激活，键盘事件才能进入 egui。
     if msg == WM_MOUSEACTIVATE {
-        return MA_NOACTIVATE; // 3 = 不激活，也不吃掉这次点击
+        return if ACTIVATABLE.load(Ordering::Relaxed) != 0 {
+            MA_ACTIVATE
+        } else {
+            MA_NOACTIVATE // 3 = 不激活，也不吃掉这次点击
+        };
     }
     // 非客户区激活态变化：直接吞掉，不重画标题栏/边框。
     if msg == WM_NCACTIVATE {
@@ -245,8 +290,6 @@ unsafe extern "system" fn erase_wndproc(hwnd: HWND, msg: u32, wparam: usize, lpa
 pub fn set_layered(hwnd: HWND) {
     if hwnd == 0 { return; }
     unsafe {
-        const GWL_EXSTYLE: i32 = -20;
-        const WS_EX_LAYERED: isize = 0x0008_0000;
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED);
         SetLayeredWindowAttributes(hwnd, 0, 255, 0x0000_0002 /*LWA_ALPHA*/);
@@ -294,8 +337,91 @@ pub fn ensure_erase_guard(hwnd: HWND) {
     }
 }
 
+/// 后台 8ms 轮询：按光标是否落在岛体/面板矩形内，动态开关整窗 WS_EX_TRANSPARENT 穿透。
+/// 不依赖消息循环（WM_TIMER 在此框架下不稳定），也不依赖 egui 重绘节流，所以没有延迟。
+/// - 光标在岛体/面板内 => 关闭穿透（可悬停、拖动、点击）
+/// - 光标在透明边距/窗口外 => 打开穿透（点击落到下方窗口，跨进程生效）
+/// 若按住左键且当前可交互，则保持可交互，避免拖拽途中被切成穿透。
+/// 同时每 8ms 重新断言一次，抵消 winit 在 set_outer_position/set_inner_size 时重置扩展样式。
+pub fn start_click_through_poller(hwnd: HWND) {
+    if hwnd == 0 { return; }
+    unsafe {
+        if CLICK_POLL_STARTED.swap(1, Ordering::SeqCst) != 0 {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        let dbg = std::env::var_os("WINISLE_CLICK_DEBUG").is_some();
+        // 仅自测用：用窗口中心代替真实光标，验证展开→收起后的穿透状态恢复。
+        let fake_center = std::env::var_os("WINISLE_FAKE_CENTER").is_some();
+        // 仅自测用：用固定点替代真实光标（不移动用户鼠标），验证命中/穿透逻辑。
+        let fake: Option<(i32, i32)> = std::env::var("WINISLE_FAKE_CURSOR")
+            .ok()
+            .and_then(|s| {
+                let mut it = s.split(',');
+                let x = it.next()?.trim().parse::<i32>().ok()?;
+                let y = it.next()?.trim().parse::<i32>().ok()?;
+                Some((x, y))
+            });
+        let mut n: u32 = 0;
+        loop {
+            unsafe {
+                let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                if (ex & WS_EX_LAYERED) == 0 {
+                    // winit 有时会重置扩展样式，导致分层位丢失；丢失后 WS_EX_TRANSPARENT 将不再穿透，需补回。
+                    set_layered(hwnd);
+                }
+                let dragging = DRAGGING.load(Ordering::Relaxed) != 0;
+                let (px, py) = if fake_center {
+                    let mut rc = RECT::default();
+                    GetWindowRect(hwnd, &mut rc);
+                    ((rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2)
+                } else {
+                    cursor_pos()
+                };
+                let inside = hit_contains(hwnd, px, py);
+                // 拖动时保持可交互（光标可能离开岛体）；其余情况纯按光标是否在岛体/面板内决定穿透，
+                // 不做任何“按下锁存”，避免一次单击把窗口锁成可交互导致后续点击被吞。
+                let want_on = if dragging { false } else { !inside };
+                set_click_through(hwnd, want_on);
+                n = n.wrapping_add(1);
+                if dbg && (n % 60 == 0) {
+                    let hit = (
+                        HIT_L.load(Ordering::Relaxed),
+                        HIT_T.load(Ordering::Relaxed),
+                        HIT_R.load(Ordering::Relaxed),
+                        HIT_B.load(Ordering::Relaxed),
+                        HIT_ON.load(Ordering::Relaxed),
+                    );
+                    let ex2 = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                    let line = format!(
+                        "cur=({},{}) fake={} hit=({},{},{},{}) hiton={} inside={} transp={}\n",
+                        px, py, fake.is_some(), hit.0, hit.1, hit.2, hit.3, hit.4, inside,
+                        (ex2 & WS_EX_TRANSPARENT) != 0
+                    );
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("D:\\LingDao\\_click_debug.txt")
+                    {
+                        let _ = f.write_all(line.as_bytes());
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+    });
+}
+
 /// 左键当前是否按下（全局，用于拖动，不依赖窗口消息）。
 pub fn lbutton_down() -> bool {
+    // 自测钩子：env WINISLE_BUTTON_FILE（文件内容 "0"/"1"）可脚本化按键状态，不产生真实按键事件。
+    if let Ok(path) = std::env::var("WINISLE_BUTTON_FILE") {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            return s.trim() == "1";
+        }
+    }
     unsafe { (GetAsyncKeyState(VK_LBUTTON) as u16 & 0x8000) != 0 }
 }
 
@@ -313,12 +439,33 @@ pub fn release_mouse() {
 }
 
 /// 全局光标位置（物理像素，屏幕坐标）。用于不依赖窗口消息的悬停检测。
+/// 自测钩子：env `WINISLE_CURSOR_FILE`（文件内容 "x,y"，可动态改写以脚本化光标）或
+/// `WINISLE_FAKE_CURSOR`（固定 "x,y"）可替代真实光标，用于无鼠标自动验证，不移动用户鼠标。
 pub fn cursor_pos() -> (i32, i32) {
+    if let Ok(path) = std::env::var("WINISLE_CURSOR_FILE") {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            if let Some(v) = parse_xy(&s) {
+                return v;
+            }
+        }
+    }
+    if let Ok(s) = std::env::var("WINISLE_FAKE_CURSOR") {
+        if let Some(v) = parse_xy(&s) {
+            return v;
+        }
+    }
     let mut p = POINT::default();
     unsafe {
         GetCursorPos(&mut p);
     }
     (p.x, p.y)
+}
+
+fn parse_xy(s: &str) -> Option<(i32, i32)> {
+    let mut it = s.trim().split(',');
+    let x = it.next()?.trim().parse::<i32>().ok()?;
+    let y = it.next()?.trim().parse::<i32>().ok()?;
+    Some((x, y))
 }
 
 /// 窗口在屏幕上的物理矩形 (left, top, right, bottom)。
@@ -328,6 +475,60 @@ pub fn window_rect(hwnd: HWND) -> (i32, i32, i32, i32) {
         GetWindowRect(hwnd, &mut r);
     }
     (r.left, r.top, r.right, r.bottom)
+}
+
+unsafe fn monitor_info_rect(hmon: isize) -> Option<(i32, i32, i32, i32)> {
+    if hmon == 0 {
+        return None;
+    }
+    let mut mi: MONITORINFO = std::mem::zeroed();
+    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(hmon, &mut mi) == 0 {
+        return None;
+    }
+    Some((
+        mi.rcMonitor.left,
+        mi.rcMonitor.top,
+        mi.rcMonitor.right,
+        mi.rcMonitor.bottom,
+    ))
+}
+
+/// 包含指定物理点 (x, y) 的显示器矩形 (left, top, right, bottom)，虚拟屏坐标、物理像素。
+/// 该点不在任何显示器上时，返回距离最近的显示器（MONITOR_DEFAULTTONEAREST）。
+pub fn monitor_rect_at(x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
+    unsafe {
+        let hmon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+        monitor_info_rect(hmon)
+    }
+}
+
+/// 窗口当前所在（或最近）的显示器矩形 (left, top, right, bottom)，物理像素。
+pub fn monitor_rect_of_window(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
+    if hwnd == 0 {
+        return None;
+    }
+    unsafe {
+        let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        monitor_info_rect(hmon)
+    }
+}
+
+/// 整个虚拟桌面矩形 (left, top, right, bottom)，覆盖所有显示器，物理像素。
+/// 使用 GetSystemMetrics 的 SM_XVIRTUALSCREEN(76)/SM_YVIRTUALSCREEN(77)/
+/// SM_CXVIRTUALSCREEN(78)/SM_CYVIRTUALSCREEN(79)。
+pub fn virtual_screen_rect() -> (i32, i32, i32, i32) {
+    unsafe {
+        let x = GetSystemMetrics(76);
+        let y = GetSystemMetrics(77);
+        let w = GetSystemMetrics(78);
+        let h = GetSystemMetrics(79);
+        if w <= 0 || h <= 0 {
+            // 极端兜底：退化成主屏
+            return (0, 0, GetSystemMetrics(0).max(1), GetSystemMetrics(1).max(1));
+        }
+        (x, y, x + w, y + h)
+    }
 }
 
 /// 用"圆角区域"把窗口裁剪成岛体形状（物理像素，相对窗口本地坐标）。
@@ -391,6 +592,30 @@ pub fn set_click_through(hwnd: HWND, on: bool) {
         };
         if new != ex {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new);
+        }
+    }
+}
+
+/// 临时允许/禁止窗口被点击激活。搜索页需要文本输入时打开，离开后恢复灵动岛的不抢焦点行为。
+pub fn set_activatable(hwnd: HWND, on: bool) {
+    if hwnd == 0 {
+        return;
+    }
+    ACTIVATABLE.store(if on { 1 } else { 0 }, Ordering::Relaxed);
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let new = if on {
+            ex & !WS_EX_NOACTIVATE
+        } else {
+            ex | WS_EX_NOACTIVATE
+        };
+        if new != ex {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new);
+        }
+        if on {
+            // 允许激活后主动把键盘焦点拿过来：用户点开搜索页即可直接输入。
+            SetForegroundWindow(hwnd);
+            SetFocus(hwnd);
         }
     }
 }
@@ -512,8 +737,20 @@ pub fn find_process_window(title: &str) -> HWND {
     0
 }
 /// 把窗口移动到主屏幕正中。
-pub fn center_window(hwnd: HWND) {
+/// 以“物理像素整数”精确设置窗口外框左上角位置（不改尺寸、不改 Z 序、不激活）。
+/// 直接调用 Win32 SetWindowPos，绕开 winit OuterPosition 在 DPI 缩放下的取整/锚点偏差，
+/// 用于消除展开↔塌收大幅移动后窗口少走几像素导致的贴边留缝，并保证逐帧位移连续。
+pub fn set_outer_position_px(hwnd: HWND, x: i32, y: i32) {
     if hwnd == 0 {
+        return;
+    }
+    unsafe {
+        // SWP_NOSIZE(0x1) | SWP_NOZORDER(0x4) | SWP_NOACTIVATE(0x10)
+        SetWindowPos(hwnd, 0, x, y, 0, 0, 0x0015);
+    }
+}
+
+pub fn center_window(hwnd: HWND) {    if hwnd == 0 {
         return;
     }
     unsafe {
@@ -662,6 +899,7 @@ extern "system" {
     fn SetCursorPos(x: i32, y: i32) -> i32;
     fn mouse_event(flags: u32, dx: u32, dy: u32, data: u32, extra: usize);
     fn SetForegroundWindow(h: HWND) -> i32;
+    fn SetFocus(h: HWND) -> HWND;
     fn IsIconic(h: HWND) -> i32;
 }
 unsafe extern "system" fn enum_netease_cb(hwnd: HWND, l: isize) -> i32 {

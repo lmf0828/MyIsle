@@ -258,7 +258,8 @@ fn json_lyric(s: &str, title_key: &str, expected: f64) -> Option<(f64, Vec<LrcLi
     while let Some(rel) = s[search..].find("\"content\":\"") {
         let cs = search + rel + "\"content\":\"".len();
         if let Some(sval) = read_json_str(s, cs) {
-            if sval.contains("[00:") || sval.trim_start().starts_with('[') {
+            let instr = crate::lyrics::looks_instrumental(&sval);
+            if sval.contains("[00:") || sval.trim_start().starts_with('[') || instr {
                 // 找到这条 lyric 所属的 track 名（优先 "\"track\":{" 之后的第一个 "\"name\":\""，
                 // 这样拿到的就是「歌名」，而不是专辑名/歌手名）。
                 let mut lo = cs.saturating_sub(500_000);
@@ -282,7 +283,12 @@ fn json_lyric(s: &str, title_key: &str, expected: f64) -> Option<(f64, Vec<LrcLi
                 };
                 if let Some(name) = name {
                     if key_of(&name) == title_key {
-                        if let Some((sc, l)) = best_block(&sval, expected) {
+                        if instr {
+                            // 歌词正文只是“纯音乐，请欣赏”：直接作为占位歌词返回。
+                            if best.as_ref().map(|(bs, _)| 100000.0f64 > *bs).unwrap_or(true) {
+                                best = Some((100000.0, crate::lyrics::instrumental_line()));
+                            }
+                        } else if let Some((sc, l)) = best_block(&sval, expected) {
                             if std::env::var("SODA_DBG").is_ok() {
                                 eprintln!(
                                     "DBG json hit name={:?} sc={} n={} first={:?}",

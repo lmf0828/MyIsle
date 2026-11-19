@@ -250,7 +250,6 @@ fn norm(s: &str) -> String {
 /// 读取当前在播歌曲的官方歌词。`title`/`artist` 用于防止切歌瞬间读到上一首。
 pub fn fetch_current(title: &str, artist: &str) -> Option<SodaLyric> {
     let want_t = norm(title);
-    let mut moved_window = false;
     let mut result = None;
     for attempt in 0..4 {
         let mut retry = false;
@@ -287,17 +286,14 @@ pub fn fetch_current(title: &str, artist: &str) -> Option<SodaLyric> {
                 }
             }
         }
-        // 隐藏/最小化的汽水窗口不会渲染歌词 DOM：临时把主窗显示到屏幕外，并切到播放页。
+        // 绝不移动/隐藏/显示汽水窗口（任何窗口操作都可能让客户端异常）。
+        // 仅在需要时把汽水内部路由切到播放页，让 Vue 的 LyricsView 挂载；窗口本身一动不动。
         if retry && attempt == 0 {
-            moved_window = crate::soda_patch::show_soda_offscreen();
             let _ = evaluate(NAV_PLAYER_EXPR);
             std::thread::sleep(Duration::from_millis(900));
         } else if retry && attempt < 3 {
             std::thread::sleep(Duration::from_millis(350));
         }
-    }
-    if moved_window {
-        crate::soda_patch::hide_soda_windows();
     }
     let _ = artist;
     result
