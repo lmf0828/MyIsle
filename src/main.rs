@@ -1480,7 +1480,8 @@ impl IslandApp {
         if (self.cb_anim - target).abs() < 0.002 {
             self.cb_anim = target;
         } else {
-            ctx.request_repaint();
+            // [FIX] 同上：改用 16ms 延迟重绘，避免启动入场 / 收起内容淡入时以 ~200fps 空转。
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
     }
 
@@ -6605,7 +6606,10 @@ impl eframe::App for IslandApp {
             if (self.music_amt - target_amt).abs() < 0.004 {
                 self.music_amt = target_amt;
             } else {
-                ctx.request_repaint();
+                // [FIX] 用 16ms 延迟重绘（而非立即 request_repaint）驱动平滑收敛：
+                // 立即重绘会绕过帧预算、把「载入曲目/切歌/暂停切换」时的淡入淡出顶到 ~200fps 空转。
+                // 幅度按真实 dt 推进，改 16ms 后收敛时长不变（≈0.8s），只是帧数降到 60fps。
+                ctx.request_repaint_after(Duration::from_millis(16));
             }
             // 调试钩子：强制按“无音乐”渲染收起态（用于截图表情）
             if std::env::var("WINISLE_FACE").is_ok() {
@@ -7319,9 +7323,10 @@ impl eframe::App for IslandApp {
         // 真实工作耗时（含 egui 绘制 + GPU swap），再从目标间隔里扣掉它，让帧周期精确落在
         // target_ms ≈ 16ms（60fps）。predicted_dt 已归零，request_repaint_after 的时长会被
         // 如实当作休眠（不会再被 egui 偷偷减 16.67ms），所以这里扣工作耗时是安全且精确的。
-        let est_work_ms =
-            (_diag_interval_ms - self.prev_req_ms).clamp(0.0, target_ms as f32 - 1.0);
-        let req_ms = ((target_ms as f32) - est_work_ms).max(1.0);
+        // 自适应帧预算：predicted_dt 已归零，request_repaint_after 会如实等待，因此直接用
+        // 「本帧实际工作耗时」补足到目标间隔即可：休眠 (target_ms − 本帧work) → 帧周期精确落在
+        // target_ms。不用「上一帧周期估算」，避免启动/负载变化时估算震荡把帧率顶到 >60。
+        let req_ms = ((target_ms as f32) - _diag_work_ms).max(1.0);
         self.prev_req_ms = req_ms;
         self.frame_last = Instant::now();
         ctx.request_repaint_after(Duration::from_secs_f32(req_ms / 1000.0));
