@@ -1,22 +1,44 @@
-//! 实时音频电平（默认渲染端点的峰值），用于驱动频谱随音乐跳动。
+//! 实时音频分析：整体电平 + 分频段能量（供水波频谱真实随音乐起伏）。
 //!
-//! 通过 WASAPI 的 `IAudioMeterInformation::GetPeakValue` 读取系统正在播放声音的
-//! 峰值电平（0.0~1.0），后台线程每约 33ms 采样一次并做轻度平滑，存到原子变量里。
-//! 绘制线程用 [`level`] 读取即可。拿不到电平（未播放/无设备）时返回 0。
+//! - [`level`]：通过 WASAPI `IAudioMeterInformation::GetPeakValue` 读取系统整体峰值（0~1）。
+//! - [`bands`]：通过 WASAPI **环回采集（loopback）** 抓默认渲染端点的混音流，做 1024 点 FFT，
+//!   折算成 [`NBANDS`] 个对数频段的相对能量（0~1，带自适应增益 + 平滑）。
 //!
-//! 该模块只做“有没有声音、声音多大”的整体包络，不做频率分解（FFT）。
+//! 两个后台线程都只写原子变量，绘制线程直接读取；拿不到数据时返回 0。
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static LEVEL: AtomicU32 = AtomicU32::new(0);
+
+/// 频段数量（对数分布，低→高）。
+pub const NBANDS: usize = 64;
+const ZERO: AtomicU32 = AtomicU32::new(0);
+static BANDS: [AtomicU32; NBANDS] = [ZERO; NBANDS];
+/// 低频“鼓点”包络（0~1，快起快落），用于让整体柱子跟着鼓点弹跳。
+static KICK: AtomicU32 = AtomicU32::new(0);
 
 /// 当前音量峰值（0.0~1.0，已做轻度平滑）。
 pub fn level() -> f32 {
     f32::from_bits(LEVEL.load(Ordering::Relaxed)).clamp(0.0, 1.0)
 }
 
+/// 低频鼓点包络（快攻击、快释放），0~1。
+pub fn kick() -> f32 {
+    f32::from_bits(KICK.load(Ordering::Relaxed)).clamp(0.0, 1.0)
+}
+
+/// 当前各频段相对能量（0.0~1.0，低→高，已自适应归一 + 平滑）。
+pub fn bands() -> [f32; NBANDS] {
+    let mut out = [0f32; NBANDS];
+    for (i, slot) in BANDS.iter().enumerate() {
+        out[i] = f32::from_bits(slot.load(Ordering::Relaxed)).clamp(0.0, 1.0);
+    }
+    out
+}
+
 /// 启动后台采样线程（进程内只调一次）。
 pub fn spawn() {
+    // 1) 整体电平线程
     std::thread::Builder::new()
         .name("winisle-audio-meter".into())
         .spawn(|| unsafe {
@@ -49,7 +71,6 @@ pub fn spawn() {
                     match m.GetPeakValue() {
                         Ok(v) => {
                             let prev = f32::from_bits(LEVEL.load(Ordering::Relaxed));
-                            // 上升快、回落稍慢，视觉上更有“跳动感”又不过度抖动
                             let target = v.clamp(0.0, 1.0);
                             let alpha = if target > prev { 0.55 } else { 0.20 };
                             let nv = prev + (target - prev) * alpha;
@@ -61,7 +82,6 @@ pub fn spawn() {
                         }
                     }
                 }
-                // 重连退避：拿不到设备时大约每 2 秒重试一次，避免空转
                 if meter.is_none() {
                     backoff = backoff.saturating_add(1);
                     if backoff % 60 != 0 {
@@ -73,6 +93,228 @@ pub fn spawn() {
             }
         })
         .ok();
+
+    // 2) 分频段能量线程
+    std::thread::Builder::new()
+        .name("winisle-audio-bands".into())
+        .spawn(|| unsafe { bands_loop() })
+        .ok();
+}
+
+const NFFT: usize = 1024;
+const PI: f32 = std::f32::consts::PI;
+
+/// 原地基 2 FFT（要求长度 2 的幂）。
+fn fft(re: &mut [f32], im: &mut [f32]) {
+    let n = re.len();
+    // 位反转
+    let mut j = 0usize;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j |= bit;
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+    let mut len = 2usize;
+    while len <= n {
+        let ang = -2.0 * PI / len as f32;
+        let (wr, wi) = (ang.cos(), ang.sin());
+        let mut i = 0usize;
+        while i < n {
+            let mut cur_r = 1.0f32;
+            let mut cur_i = 0.0f32;
+            for k in 0..len / 2 {
+                let ur = re[i + k];
+                let ui = im[i + k];
+                let vr = re[i + k + len / 2] * cur_r - im[i + k + len / 2] * cur_i;
+                let vi = re[i + k + len / 2] * cur_i + im[i + k + len / 2] * cur_r;
+                re[i + k] = ur + vr;
+                im[i + k] = ui + vi;
+                re[i + k + len / 2] = ur - vr;
+                im[i + k + len / 2] = ui - vi;
+                let nr = cur_r * wr - cur_i * wi;
+                cur_i = cur_r * wi + cur_i * wr;
+                cur_r = nr;
+            }
+            i += len;
+        }
+        len <<= 1;
+    }
+}
+
+unsafe fn bands_loop() {
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+        AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+    let mut hann = [0f32; NFFT];
+    for (i, h) in hann.iter_mut().enumerate() {
+        *h = 0.5 - 0.5 * (2.0 * PI * i as f32 / (NFFT as f32 - 1.0)).cos();
+    }
+
+    let mut smooth = [0f32; NBANDS];
+    let mut avg = [0.02f32; NBANDS];
+    let mut kick_env = 0f32;
+    let mut mono: Vec<f32> = Vec::with_capacity(NFFT * 4);
+
+    'reconnect: loop {
+        // ---- 建立环回采集 ----
+        let setup = (|| -> windows::core::Result<(IAudioClient, IAudioCaptureClient, u32, u16, u16)> {
+            let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+            let dev = en.GetDefaultAudioEndpoint(eRender, eConsole)?;
+            let client: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
+            let pfmt = client.GetMixFormat()?;
+            let wfx = *pfmt;
+            let init = client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK,
+                20_000_000,
+                0,
+                pfmt,
+                None,
+            );
+            CoTaskMemFree(Some(pfmt as *const core::ffi::c_void));
+            init?;
+            let cap: IAudioCaptureClient = client.GetService()?;
+            client.Start()?;
+            Ok((client, cap, wfx.nSamplesPerSec, wfx.nChannels, wfx.wBitsPerSample))
+        })();
+
+        let (client, cap, sr, ch, bits) = match setup {
+            Ok(v) => v,
+            Err(_) => {
+                for b in BANDS.iter() {
+                    b.store(0f32.to_bits(), Ordering::Relaxed);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+                continue;
+            }
+        };
+        let ch = ch.max(1) as usize;
+
+        // 频段边界（对数，低→高），随采样率确定
+        let fmin = 40f32;
+        let fmax = (sr as f32 * 0.5 * 0.95).min(16000.0).max(fmin * 2.0);
+        let mut blo = [0usize; NBANDS];
+        let mut bhi = [0usize; NBANDS];
+        for b in 0..NBANDS {
+            let t0 = b as f32 / NBANDS as f32;
+            let t1 = (b + 1) as f32 / NBANDS as f32;
+            let lo = fmin * (fmax / fmin).powf(t0);
+            let hi = fmin * (fmax / fmin).powf(t1);
+            let mut k0 = (lo * NFFT as f32 / sr as f32).floor() as usize;
+            let mut k1 = (hi * NFFT as f32 / sr as f32).ceil() as usize;
+            k0 = k0.clamp(1, NFFT / 2 - 1);
+            k1 = k1.clamp(k0, NFFT / 2 - 1);
+            blo[b] = k0;
+            bhi[b] = k1;
+        }
+
+        // ---- 采集循环 ----
+        loop {
+            let mut data: *mut u8 = std::ptr::null_mut();
+            let mut frames: u32 = 0;
+            let mut flags: u32 = 0;
+            match cap.GetBuffer(&mut data, &mut frames, &mut flags, None, None) {
+                Ok(()) => {}
+                Err(_) => break, // 设备变化/流断开 → 重连
+            }
+            if frames > 0 {
+                let n = frames as usize * ch;
+                if data.is_null() {
+                    for _ in 0..frames {
+                        mono.push(0.0);
+                    }
+                } else if bits == 32 {
+                    let s = std::slice::from_raw_parts(data as *const f32, n);
+                    for f in 0..frames as usize {
+                        let mut acc = 0f32;
+                        for c in 0..ch {
+                            acc += s[f * ch + c];
+                        }
+                        mono.push(acc / ch as f32);
+                    }
+                } else if bits == 16 {
+                    let s = std::slice::from_raw_parts(data as *const i16, n);
+                    for f in 0..frames as usize {
+                        let mut acc = 0f32;
+                        for c in 0..ch {
+                            acc += s[f * ch + c] as f32 / 32768.0;
+                        }
+                        mono.push(acc / ch as f32);
+                    }
+                } else {
+                    for _ in 0..frames {
+                        mono.push(0.0);
+                    }
+                }
+                let _ = cap.ReleaseBuffer(frames);
+            }
+
+            if mono.len() > NFFT * 4 {
+                let drop = mono.len() - NFFT * 2;
+                mono.drain(0..drop);
+            }
+
+            if mono.len() >= NFFT {
+                let mut re = [0f32; NFFT];
+                let mut im = [0f32; NFFT];
+                let start = mono.len() - NFFT;
+                for i in 0..NFFT {
+                    re[i] = mono[start + i] * hann[i];
+                }
+                fft(&mut re, &mut im);
+                let mut lowmax = 0f32;
+                for b in 0..NBANDS {
+                    let mut sum = 0f32;
+                    let mut cnt = 0u32;
+                    for k in blo[b]..=bhi[b] {
+                        sum += (re[k] * re[k] + im[k] * im[k]).sqrt();
+                        cnt += 1;
+                    }
+                    let e = if cnt > 0 { sum / cnt as f32 } else { 0.0 } / (NFFT as f32 * 0.5);
+                    // 上升快、回落也较快 → 鼓点有弹跳感，不会糊成一片
+                    let alpha = if e > smooth[b] { 0.82 } else { 0.30 };
+                    smooth[b] += (e - smooth[b]) * alpha;
+                    // 缓慢基线（约 0.5s）做动态范围压缩：瞬态鼓点相对基线被显著拉高，静音迅速回落
+                    avg[b] += (smooth[b] - avg[b]) * 0.03;
+                    let val = (smooth[b] / (avg[b] * 2.2 + 0.003)).clamp(0.0, 1.0);
+                    // 轻微开方：中小能量也可见，同时尽量保留峰值对比
+                    let val = val.powf(0.8);
+                    if b <= 10 {
+                        lowmax = lowmax.max(val);
+                    }
+                    BANDS[b].store(val.to_bits(), Ordering::Relaxed);
+                }
+                // 低频鼓点包络：快攻击(0.92)、快释放(0.16)，让柱子随底鼓明显起跳
+                let ka = if lowmax > kick_env { 0.92 } else { 0.16 };
+                kick_env += (lowmax - kick_env) * ka;
+                KICK.store(kick_env.to_bits(), Ordering::Relaxed);
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+
+        let _ = client.Stop();
+        for b in BANDS.iter() {
+            b.store(0f32.to_bits(), Ordering::Relaxed);
+        }
+        KICK.store(0f32.to_bits(), Ordering::Relaxed);
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        continue 'reconnect;
+    }
 }
 
 #[cfg(test)]
@@ -92,5 +334,19 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
         assert!(mx > 0.05, "no audio peak detected (music playing?)");
+    }
+
+    /// 手动探针：打印频段能量。`cargo test --release probe_bands -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn probe_bands() {
+        spawn();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        for _ in 0..6 {
+            let b = bands();
+            let s: Vec<String> = b.iter().map(|v| format!("{:.2}", v)).collect();
+            println!("bands=[{}]", s.join(" "));
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
     }
 }

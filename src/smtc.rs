@@ -323,7 +323,13 @@ fn pick_session(m: &Mgr, prefer_app: &str) -> Option<Session> {
                         .SourceAppUserModelId()
                         .map(|x| x.to_string())
                         .unwrap_or_default();
-                    // 只接受网易云 / 汽水，其它音源（浏览器视频等）直接跳过
+                    // 只接受音乐类客户端，其它音源（浏览器视频等）直接跳过
+                    if std::env::var_os("WINISLE_SMTC_LOG").is_some() {
+                        dlog(&format!(
+                            "sess[{}] app={:?} playing={} accept={}",
+                            i, app, playing, is_music_source(&app)
+                        ));
+                    }
                     if !is_music_source(&app) {
                         continue;
                     }
@@ -357,9 +363,9 @@ fn pick_session(m: &Mgr, prefer_app: &str) -> Option<Session> {
     r
 }
 
-/// WinIsle 只接音乐模块，且只认「网易云音乐」和「汽水音乐」两个客户端；
-/// 其它音源（浏览器视频/网页播放、QQ音乐、Spotify、酷狗、酷我、系统播放器等）一律不采纳。
-/// 判定用 AUMID / exe 名里的关键字，与 main.rs 的 src_label / app_is_soda 保持一致。
+/// 接受桌面音乐客户端（与 Daozai 对齐）：网易云 / 汽水 / QQ音乐 / 酷狗 / 酷我 / Spotify / Apple Music / 波点。
+/// 浏览器视频、网页播放等非音乐客户端一律不采纳（可通过白名单继续扩充）。
+/// 判定用 AUMID / exe 名里的关键字，与 main.rs 的 src_label / platform::player_running 保持一致。
 fn is_music_source(app: &str) -> bool {
     let a = app.to_ascii_lowercase();
     a.contains("cloudmusic")
@@ -368,6 +374,19 @@ fn is_music_source(app: &str) -> bool {
         || a.contains("soda")
         || a.contains("qishui")
         || app.contains("汽水")
+        || a.contains("qqmusic")
+        || app.contains("QQ音乐")
+        || a.contains("kugou")
+        || app.contains("酷狗")
+        || a.contains("kuwo")
+        || a.contains("kwmusic")
+        || app.contains("酷我")
+        || a.contains("spotify")
+        || a.contains("applemusic")
+        || a.contains("appleinc.applemusicwin")
+        || app.contains("Apple Music")
+        || a.contains("bodian")
+        || app.contains("波点")
 }
 
 fn dlog(s: &str) {

@@ -27,6 +27,7 @@ WinIsle 基于 Rust 生态构建。以下为直接依赖（含传递依赖）的
 | 资源 | 许可协议 |
 | --- | --- |
 | Segoe UI / Segoe MDL2 Assets（Windows 系统字体，仅调用系统已安装字体） | 随 Windows 系统授权，不随本程序分发 |
+| [思源黑体 Noto Sans SC](https://github.com/notofonts/noto-cjk)（内嵌 Regular / Bold，用作中文界面字体） | SIL Open Font License 1.1（OFL-1.1），允许随程序分发 |
 
 ## 美术素材
 

@@ -332,6 +332,9 @@ pub fn fetch_play_state() -> Option<(bool, f64, f64)> {
         .unwrap_or(0.0);
     let cur = o.get("cur").and_then(|x| x.as_f64()).unwrap_or(-1.0);
     let playing = o.get("playing").and_then(|x| x.as_bool()).unwrap_or(false);
+    if std::env::var_os("WINISLE_SODAPROG_LOG").is_some() {
+        dlog(&format!("play_state playing={} cur={:.2} dur={:.2}", playing, cur, dur));
+    }
     Some((playing, cur, dur))
 }
 
@@ -465,21 +468,13 @@ pub fn fetch_progress(_expected_dur: f64) -> Option<(f64, f64)> {
     }
     let (cur0, total) = pair?;
     // 进度以进度条填充比例 pct 为准（亚秒精度、随播放实时推进）。
-    // 说明：`.slider-tip` 的“当前时间”文本常常是静态/滞后的（只在悬停时更新），
-    // 之前拿它做“合理性校验”会把实时 pct 误判为异常、退回静止的文本秒数，
-    // 导致歌词高亮与真实播放位置越差越远（“歌词跟不上”）。改为优先 pct×总时长，
-    // pct 不可用时才退回文本秒数。
-    // 当前秒数：以 `.indicator` 的整秒为基准（真实、每秒刷新），若 pct 折算出的亚秒位置与整秒
-    // 相差 ≤1.5s（说明 pct 与显示秒一致、只是更精细）则用 pct 的亚秒值，令歌词逐字更贴合；
-    // 若 pct 明显偏离（pct 只有 1% 粒度≈2~3s、偶尔滞后/在缓冲位），则退回整秒，避免被粗粒度带偏。
+    // 说明：`.indicator` 里的“当前时间”文本经常会卡住不刷新（实测停在 02:30，
+    // 而实际已播到 02:46），只有总时长可信；之前拿它做“合理性校验”会把正确的
+    // 实时 pct 误判为异常、退回静止的文本秒数，导致进度永远卡在 2:30/2:31 来回跳。
+    // 因此：只要 pct 有效，就一律用 pct×总时长；仅在 pct 缺失/越界时才退回文本秒数。
     let cur = match pct {
         Some(p) if p.is_finite() && p >= 0.0 && p <= 100.5 && total > 1.0 => {
-            let pc = (total * p / 100.0).clamp(0.0, total);
-            if (pc - cur0).abs() <= 1.5 {
-                pc
-            } else {
-                cur0
-            }
+            (total * p / 100.0).clamp(0.0, total)
         }
         _ => cur0,
     };

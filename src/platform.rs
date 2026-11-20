@@ -947,12 +947,18 @@ unsafe extern "system" fn enum_media_cb(hwnd: HWND, l: isize) -> i32 {
     1
 }
 
-/// 扫描已知播放器（仅网易云/汽水）的顶层窗口标题，
+/// 扫描已知音乐客户端的顶层窗口标题，
 /// 若形如 “歌名 - 歌手” 则返回 (exe 名, 歌名, 歌手)。仅作 SMTC 的兜底。
 pub fn media_title_fallback() -> Option<(String, String, String)> {
-    const ALLOW: [&str; 2] = [
+    const ALLOW: [&str; 8] = [
         "cloudmusic.exe",
         "sodamusic.exe",
+        "qqmusic.exe",
+        "kugou.exe",
+        "kwmusic.exe",
+        "spotify.exe",
+        "applemusic.exe",
+        "bodian_pc.exe",
     ];
     let mut v: Vec<(u32, String)> = Vec::new();
     unsafe {
@@ -1241,7 +1247,7 @@ fn pids_named(name: &str) -> Vec<u32> {    let mut out = Vec::new();
     }
     out
 }
-/// 是否有已知播放器进程在运行（仅网易云/汽水）。
+/// 是否有已知音乐客户端进程在运行（网易云/汽水/QQ/酷狗/酷我/Spotify/Apple Music/波点）。
 /// 注意：这里用 exe 文件名粗判，可能有极短误判窗口，但足以用来决定“该不该保留上次的歌名”。
 pub fn player_running() -> bool {
     static WATCH: std::sync::Once = std::sync::Once::new();
@@ -1257,9 +1263,15 @@ pub fn player_running() -> bool {
 static PLAYER_RUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn player_running_now() -> bool {
-    const NAMES: [&str; 2] = [
+    const NAMES: [&str; 8] = [
         "cloudmusic.exe",
         "sodamusic.exe",
+        "qqmusic.exe",
+        "kugou.exe",
+        "kwmusic.exe",
+        "spotify.exe",
+        "applemusic.exe",
+        "bodian_pc.exe",
     ];
     // 只做一次进程快照，避免对每个名字都枚举一遍（原来 6 次快照单帧要 50~80ms）。
     unsafe {

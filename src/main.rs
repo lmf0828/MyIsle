@@ -647,8 +647,12 @@ fn src_label(app_id: &str) -> String {
         "Spotify".to_string()
     } else if s.contains("kugou") {
         "酷狗音乐".to_string()
-    } else if s.contains("kuwo") {
+    } else if s.contains("kuwo") || s.contains("kwmusic") {
         "酷我音乐".to_string()
+    } else if s.contains("applemusic") || s.contains("appleinc.applemusicwin") {
+        "Apple Music".to_string()
+    } else if s.contains("bodian") {
+        "波点音乐".to_string()
     } else {
         app_id.to_string()
     }
@@ -862,6 +866,12 @@ struct IslandApp {
     /// 上一次从 SMTC 收到的原始 position（用于判断播放器是否真的在推进位置）；
     /// 像汽水这类播放器会持续上报同一个静止 position，不能拿它反复把进度往回拉。
     smtc_rep_pos: f64,
+    /// 上一次网易云内存上报的原始 position（秒）与“最后一次真正变化”的时刻。
+    /// 网易云内存位置更新是量化的（约 0.5~1s 一跳），有时还会在两个近邻值间抖
+    /// （如 2.30 / 2.31）。不能每 450ms 拿原始值直接覆盖自维护时钟，否则进度会来回跳，
+    /// 歌词就会在两行之间闪。这里只把它当参考，主时钟保持单调。
+    netease_prev_raw: f64,
+    netease_raw_move_at: Instant,
     /// 上次执行「汽水 CDP 补丁自检」的时间（节流用）。
     last_soda_heal: Instant,
     /// 启动后是否已做过一次「汽水补丁」检查（未运行时直接补好）。
@@ -936,6 +946,9 @@ struct IslandApp {
     spec_last_t: f64,
     /// 上一帧“提交结束”的时刻，用于把渲染循环限速到 60fps（该虚拟显示器 200Hz，vsync 会顶到 200fps）
     frame_last: Instant,
+    /// 上一帧向事件循环申请的休眠毫秒数；用于自适应估算“每帧实际耗时(含绘制)”，
+    /// 从而把 request_repaint_after 的时长扣掉工作耗时，让帧周期精确落到目标（60fps）。
+    prev_req_ms: f32,
     /// 启动入场动画的起始时刻（窗口首次真正显示那一刻才置为 Some；此前画 0 不透明度，避免提前走完动画）。
     intro_start: Option<Instant>,
     /// 进程内启动基准时刻（用于窗口可见性检测失败时的兜底启动淡入）。
@@ -1131,6 +1144,8 @@ impl IslandApp {
             spos_at: Instant::now(),
             spos_valid: false,
             smtc_rep_pos: -1.0,
+            netease_prev_raw: -1.0,
+            netease_raw_move_at: Instant::now(),
             last_soda_heal: Instant::now() - Duration::from_secs(3600),
             soda_boot_checked: false,
             soda_tick_busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1175,6 +1190,7 @@ impl IslandApp {
             spec_speed: 5.2,
             spec_last_t: 0.0,
             frame_last: Instant::now() - Duration::from_millis(20),
+            prev_req_ms: 16.0,
             intro_start: None,
             boot_at: Instant::now(),
             // 入场动画默认关闭：改为和以前一样「双击后直接出现在顶部」（不再有从上方落下的黑边一闪）。
@@ -2897,33 +2913,14 @@ impl IslandApp {
 
     /// 收起态频谱：3 根随歌词密度自适应速度跳动的绿色竖条。
     fn draw_spectrum(&mut self, painter: &egui::Painter, sx: f32, base_y: f32, green: egui::Color32, t: f64) {
-        let base_speed = 5.2f32;
-        let fac = {
-            let n = self.lyr_lines.len();
-            if n >= 4 {
-                let dur = (self.lyr_lines[n - 1].t - self.lyr_lines[0].t).max(1.0);
-                let chars: usize = self.lyr_lines.iter().map(|l| l.text.chars().count()).sum();
-                let cps = chars as f64 / dur;
-                let f_cps = ((cps - 2.0) / 4.0).clamp(0.0, 1.0) as f32;
-                let gap = dur / (n - 1) as f64;
-                let f_gap = ((8.0 - gap) / 6.0).clamp(0.0, 1.0) as f32;
-                let mix = f_cps * 0.6 + f_gap * 0.4;
-                0.78 + mix * 0.62
-            } else {
-                1.0
-            }
-        };
-        let target = base_speed * fac;
+        // 收起态的频谱只是一个「正在播放」的动画标识：固定匀速循环，不跟随音频电平/节奏。
+        let base_speed = 3.2f32;
         let dt = ((t - self.spec_last_t) as f32).clamp(0.0, 0.1);
         self.spec_last_t = t;
-        let ksm = 1.0 - (-dt / 0.4).exp();
-        self.spec_speed += (target - self.spec_speed) * ksm;
-        self.spec_phase += (dt * self.spec_speed) as f64;
-        let lvl = crate::audio_meter::level();
-        let amp = 0.6 + lvl * 1.7;
+        self.spec_phase += (dt * base_speed) as f64;
         for k in 0..3 {
             let ph = (self.spec_phase + (k as f64) * 1.4).sin() as f32 * 0.5 + 0.5;
-            let hgt = 4.0 + ph * 9.0 * amp;
+            let hgt = 4.0 + ph * 8.0;
             painter.rect_filled(
                 egui::Rect::from_min_max(
                     egui::pos2(sx + (k as f32) * 5.0, base_y - hgt),
@@ -2945,7 +2942,7 @@ impl IslandApp {
         // 允许柱子向上探出频谱带一点点（进入歌词与频谱之间的空隙），但仍安全停在第五行歌词之下。
         let over = 4.0f32;
         let clip_rect = egui::Rect::from_min_max(
-            egui::pos2(fill_rect.left(), rect.top() - over),
+            egui::pos2(fill_rect.left(), rect.top() - 10.0),
             fill_rect.max,
         );
         let clip = painter.with_clip_rect(clip_rect);
@@ -2965,7 +2962,7 @@ impl IslandApp {
 
         // 底部水波区域不再铺任何深色底：直接沿用音乐内容区本身的底色，
         // 频谱柱与倒影直接浮在同一背景上（与音乐区同色，没有黑色块）。
-        let _ = br;
+        let _ = (br, accent);
 
         let pad_x = 2.0f32;
         let x0 = fill_rect.left() + pad_x;
@@ -2979,16 +2976,6 @@ impl IslandApp {
         let bw = (((x1 - x0) - gap * (n as f32 - 1.0)) / n as f32).max(1.0);
 
         let playing = self.is_playing();
-        let lvl = crate::audio_meter::level().clamp(0.0, 1.0);
-        let amt = self.music_amt.clamp(0.0, 1.0);
-        // 未播放时也保持一段缓慢“呼吸”的底噪，让频谱看起来是活的（随机、平缓地起伏）。
-        let idle_breath = 0.74 + 0.26 * ((t as f32 * 0.7).sin() * 0.5 + 0.5);
-        let energy = if playing {
-            (0.55 + 0.95 * (0.25 * amt + 0.75 * lvl)).min(1.30)
-        } else {
-            1.00 * idle_breath
-        };
-        let gain = if playing { 1.25 } else { 1.5 };
         let tt = t as f32;
         // 稳定的整数哈希→[0,1)，用于每根柱子的随机相位/幅度与逐帧小抖动
         let hash01 = |mut x: u32| -> f32 {
@@ -3000,64 +2987,99 @@ impl IslandApp {
             (x & 0xffff) as f32 / 65535.0
         };
         let framef = (tt * 30.0) as u32;
+        let smoothstep = |a: f32, b: f32, x: f32| -> f32 {
+            let x = ((x - a) / (b - a)).clamp(0.0, 1.0);
+            x * x * (3.0 - 2.0 * x)
+        };
+        // HSL→RGB：与 water-reflection-test.html 一致的配色（青 195° → 品红 330°）
+        let hsl = |h: f32, s: f32, l: f32, alpha: u8| -> egui::Color32 {
+            let h = h.rem_euclid(360.0);
+            let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+            let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+            let m = l - c * 0.5;
+            let (r, g, b) = if h < 60.0 {
+                (c, x, 0.0)
+            } else if h < 120.0 {
+                (x, c, 0.0)
+            } else if h < 180.0 {
+                (0.0, c, x)
+            } else if h < 240.0 {
+                (0.0, x, c)
+            } else if h < 300.0 {
+                (x, 0.0, c)
+            } else {
+                (c, 0.0, x)
+            };
+            egui::Color32::from_rgba_unmultiplied(
+                ((r + m) * 255.0).clamp(0.0, 255.0) as u8,
+                ((g + m) * 255.0).clamp(0.0, 255.0) as u8,
+                ((b + m) * 255.0).clamp(0.0, 255.0) as u8,
+                alpha,
+            )
+        };
 
         // 不再叠加水面深色渐变，保持与音乐内容区同色。
 
         for i in 0..n {
             let f = i as f32 / (n as f32 - 1.0).max(1.0);
-            // 两侧强、中间弱的盆形包络：中间约 0.22，向外平滑抬到端部约 1.10
-            // （峰值别拉太夸，否则两端全撞上限→顶上一条平线）
             let d = ((f - 0.5).abs() * 2.0).clamp(0.0, 1.0);
-            let env_bowl = {
-                let x = ((d - 0.28) / 0.72).clamp(0.0, 1.0);
-                0.22 + 0.88 * (x * x * (3.0 - 2.0 * x))
-            };
-            // 未播放时把盆形压平一些：整排柱子都有明显起伏，而不是只有两端动、中间几乎贴地
-            let env = if playing { env_bowl } else { 0.45 + 0.55 * env_bowl };
-            let s0 = (tt * 7.2 + i as f32 * 1.7).sin() * 0.5 + 0.5; // 快频，抖动更鲜明
-            let s1 = (tt * 2.2 + i as f32 * 0.53).sin() * 0.5 + 0.5;
-            let s2 = (tt * 1.3 - i as f32 * 0.29 + 1.7).sin() * 0.5 + 0.5;
-            let s3 = (tt * 0.6 + i as f32 * 0.17 + 0.9).sin() * 0.5 + 0.5; // 慢速漂移，制造随机感
-            // 播放时快频与逐帧微抖更鲜明；未播放时以慢速漂移为主，保持“随机平缓地动”
-            let (w0, w1, w2, w3) = if playing {
-                (0.26f32, 0.34f32, 0.22f32, 0.18f32)
-            } else {
-                (0.08f32, 0.28f32, 0.30f32, 0.34f32)
-            };
-            // 每根柱子一个稳定的随机系数（0.55~1.50），相邻柱子差异明显
-            let jit = 0.55 + 0.95 * hash01(i as u32);
-            // 逐帧随机微抖：播放时 ±20% 更鲜活；暂停时 ±8% 更平缓
-            let flick = if playing {
-                0.80 + 0.40 * hash01((i as u32) ^ framef.wrapping_mul(2_654_435_761))
-            } else {
-                0.92 + 0.16 * hash01((i as u32) ^ framef.wrapping_mul(2_654_435_761))
-            };
+            // “盆地”包络：中间压平、两端抬升。用幂函数 d^1.7 而非 smoothstep，
+            // 让最外缘仍保留斜率、越靠边越能继续长高，不在两端形成一条齐平的顶线。
+            let bowl = 0.18 + 1.06 * d.powf(1.7);
             let beat = ((tt * 3.5).sin() * 0.5 + 0.5).powi(4);
-            let raw = 0.16 + 0.84 * (s0 * w0 + s1 * w1 + s2 * w2 + s3 * w3);
-            // 两端可稍微更高一点（最多 +12%），中间严格受 max_h 约束在第五行歌词之下
-            let edge = 1.0 + 0.12 * d;
-            let amp = raw * env * jit * flick;
-            // 软饱和（指数逼近 1）替代硬 clamp：越高越难再长，但不会所有柱子一起被削成同一高度
-            let x = amp * energy * gain + beat * 0.14 * env;
-            let v = (1.0 - (-x).exp()).clamp(0.05, 0.985);
-            let hgt = (v * max_h * edge).max(1.5);
+            // 「未播放」的基础柱高（低频平滑起伏 + 极小固定随机 + 轻微拍点）
+            let shape = 0.12 * (f * std::f32::consts::TAU * 1.0 + tt * 0.9).sin()
+                + 0.07 * (f * std::f32::consts::TAU * 2.0 - tt * 0.6).sin()
+                + 0.04 * (f * std::f32::consts::TAU * 3.5 + tt * 1.3).sin();
+            let rnd = hash01((i as u32).wrapping_mul(2_654_435_761) ^ 0x9e37_79b9) * 2.0 - 1.0;
+            let idle_b = (0.50 + shape + 0.05 * rnd + 0.09 * beat).clamp(0.30, 0.80);
+            let vv = if playing {
+                // 以「未播放」的柱子为基底，叠加真实分频段能量做“泵动”：
+                // 不同歌曲/时刻高低不同；中间始终受盆形约束，不会向上盖到第五行歌词
+                let bands_now = crate::audio_meter::bands();
+                let bpos = f * (crate::audio_meter::NBANDS - 1) as f32;
+                let bi = bpos.floor() as usize;
+                let bf = bpos - bi as f32;
+                let b0 = bands_now[bi.min(crate::audio_meter::NBANDS - 1)];
+                let b1 = bands_now[(bi + 1).min(crate::audio_meter::NBANDS - 1)];
+                let band = b0 + (b1 - b0) * bf; // 0..1 真实能量
+                // 鼓点/瞬态更突出：轻度 gamma 拉高低能量差，flick 只保留极小随机
+                let bandv = band.powf(0.72);
+                let flick = 0.97 + 0.06 * hash01((i as u32) ^ framef.wrapping_mul(2_654_435_761));
+                // 以真实频段为主（78%）、未播放柱形纹理为辅（22%），让重鼓能明显顶起来
+                let idle_n = ((idle_b - 0.30) / 0.50).clamp(0.0, 1.0);
+                let mix = 0.22 * idle_n + 0.78 * bandv;
+                let drive = 0.14 + 1.10 * mix; // 静音≈0.14，重鼓≈1.24
+                // 底鼓包络整体“泵动”：鼓点瞬间所有柱子一起抬升，鼓点间回落，抖动更明显
+                let kick = crate::audio_meter::kick();
+                let vr = bowl * drive * flick * (0.55 + 0.90 * kick);
+                let knee = 0.70f32;
+                let ceil = 0.96f32;
+                if vr <= knee {
+                    vr
+                } else {
+                    knee + (ceil - knee) * (1.0 - (-(vr - knee) / (ceil - knee) * 1.8).exp())
+                }
+            } else {
+                (idle_b * bowl).clamp(0.0, 1.0)
+            };
+            let v = vv.clamp(0.05, 0.99);
+            let hgt = (v * max_h).max(1.5) + 5.0;
             let bx = x0 + i as f32 * (bw + gap);
 
-            let base = lerp_color(egui::Color32::from_rgb(122, 236, 255), accent, (f * 0.9).clamp(0.0, 1.0));
-            let top_c = egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), (a as f32 * 0.95) as u8);
-            let bot_c = egui::Color32::from_rgba_unmultiplied(base.r() / 3, base.g() / 2, base.b() / 2, (a as f32 * 0.30) as u8);
+            // 配色与 HTML 单效果版一致：按横向位置 195°→330°（青→品红）
+            let hue = 195.0 + f * 135.0;
+            let base = hsl(hue, 0.92, 0.62, 255);
+            let top_c = hsl(hue, 0.96, 0.78, (a as f32 * 0.98) as u8);
+            let bot_c = hsl(hue, 0.90, 0.52, (a as f32 * 0.26) as u8);
             grad_rect(
                 &clip,
                 egui::Rect::from_min_max(egui::pos2(bx, horizon - hgt), egui::pos2(bx + bw, horizon)),
                 top_c,
                 bot_c,
             );
-            let cap = lerp_color(base, egui::Color32::WHITE, 0.55);
-            clip.rect_filled(
-                egui::Rect::from_min_size(egui::pos2(bx, horizon - hgt), egui::vec2(bw, 1.5)),
-                zero_r,
-                egui::Color32::from_rgba_unmultiplied(cap.r(), cap.g(), cap.b(), (a as f32 * 0.85) as u8),
-            );
+            // 顶部高光：不再单独叠一条 1.5px 的 cap（会在柱顶形成一小块异色块）
+            // 直接把渐变顶端调亮，让柱顶与柱身同一个渐变平滑过渡。
 
             // 倒影：分段绘制 + 横向波纹抖动，越往下越淡（与 HTML 单效果版一致的算法）
             let refl_h = (hgt * 0.85).min(refl_depth);
@@ -3194,13 +3216,6 @@ impl IslandApp {
             "打开音乐客户端播放后自动显示歌词",
             egui::FontId::proportional(12.0),
             egui::Color32::from_rgba_unmultiplied(118, 126, 142, a),
-        );
-        painter.text(
-            egui::pos2(rect.center().x, rect.center().y + 32.0),
-            egui::Align2::CENTER_CENTER,
-            "目前支持：网易云音乐、汽水音乐",
-            egui::FontId::proportional(10.5),
-            egui::Color32::from_rgba_unmultiplied(96, 104, 120, a),
         );
     }
 
@@ -3891,7 +3906,7 @@ impl IslandApp {
         // ---------- 歌词区（可上下拖动浏览；松手后自动回到当前进度） ----------
         let instrumental = lyrics::is_instrumental(&self.lyr_lines);
         let cur = if instrumental { None } else { self.cur_lyric_idx() };
-        let lfont = 14.0f32;
+        let lfont = self.cfg.lyric_font.clamp(10.0, 20.0);
         let line_font = egui::FontId::proportional(lfont);
         let row_h = 22.0f32;
         let lx0 = cx0 - disc_pad;
@@ -6071,6 +6086,12 @@ impl eframe::App for IslandApp {
             }
         }
         let _pf_t0 = std::time::Instant::now();
+        // [FIX] egui 的 request_repaint_after 会从每个 delay 里减去 input.predicted_dt
+        // （egui context.rs:187-190），而 eframe 从不设置 predicted_dt，它一直是默认的
+        // 1/60s≈16.67ms（egui input.rs:94）。于是我们 request_repaint_after(16ms) 被算成
+        // 16-16.67 → 饱和为 0 → 每帧立即重绘 → GUI 主线程 220fps 忙循环、吃满 1 核。
+        // 把 predicted_dt 归零后，delay 会被如实使用（不再被偷偷减掉）。
+        ctx.input_mut(|i| i.predicted_dt = 0.0);
         self.perf_region_ms = 0.0;
         self.perf_netease_ms = 0.0;
         self.poll_update();
@@ -6475,22 +6496,58 @@ impl eframe::App for IslandApp {
             // 记录旧进度，用于判断“是否真的在走”。但要区分“暂停不动”和“用户拖动进度条(seek)”：
             // seek 时位置会突变（前后都可能，通常跨度大），必须当作在播放/保持原状态并立即对齐，
             // 不能误判成暂停，否则拖完进度后歌词会“愣一下才追上来”。
+            let now = std::time::Instant::now();
             let prev_valid = self.spos_valid;
-            let prev_pos = self.spos;
-            let prev_elapsed = self.spos_at.elapsed().as_secs_f64();
+            let prev_raw = self.netease_prev_raw;
             if let Some((p, d)) = _ne_res {
                 self.netease_dur = d;
-                if prev_valid && prev_elapsed >= 0.25 {
-                    let advanced = p - prev_pos;
-                    let seek = advanced.abs() > 2.0;
-                    let playing = if seek { self.is_playing() } else { advanced > 0.12 };
-                    self.ui_playing = playing;
-                    self.music.playing = playing;
-                    self.clock_playing = playing;
+                // 网易云进程内存里的 position 是量化的（约 0.5~1s 才跳一次），偶发还会在两个
+                // 近邻值间抖动。先从原始值判断“有没有真的前进 / 是否自身倒退了（seek）”。
+                let raw_moved = prev_raw < 0.0 || (p - prev_raw).abs() >= 0.02;
+                let raw_rewound = prev_raw >= 0.0 && p + 0.5 < prev_raw;
+                let raw_jumped_fwd = prev_raw >= 0.0 && p - prev_raw > 2.0;
+                if raw_moved {
+                    self.netease_prev_raw = p;
+                    self.netease_raw_move_at = now;
                 }
-                self.spos = p;
-                self.spos_at = Instant::now();
-                self.spos_valid = true;
+                // 播放态：只有“原始位置在 1.6s 内持续不变”才判定为暂停。
+                // 不能拿单次 450ms 采样是否推进来判断，否则量化期间会被误判暂停，
+                // 造成自维护时钟冻结/回跳，进度显示便在 2.30 / 2.31 之间来回跳。
+                if raw_jumped_fwd {
+                    // 位置大跳（seek）：保持当前播放态，仅对齐位置（下面处理）
+                } else if raw_moved {
+                    self.ui_playing = true;
+                    self.music.playing = true;
+                    self.clock_playing = true;
+                } else if self.netease_raw_move_at.elapsed() > Duration::from_millis(1600) {
+                    self.ui_playing = false;
+                    self.music.playing = false;
+                    self.clock_playing = false;
+                }
+                // 时间轴：以自维护时钟为主，原始位置只做“有界修正”；
+                // -2.0..0.25 秒的落后/±0.01 抖动一律忽略，保证进度单调、不倒退。
+                if !prev_valid {
+                    self.spos = p;
+                    self.spos_at = now;
+                    self.spos_valid = true;
+                } else {
+                    let cur = self.current_pos();
+                    let diff = p - cur;
+                    if diff > 2.0 || raw_rewound {
+                        // 用户拖动进度（大跳，或原始值自身倒退）：立即对齐
+                        self.spos = p;
+                        self.spos_at = now;
+                    } else if diff > 0.25 {
+                        // 原始位置更靠前：半程追赶，平滑不跳
+                        self.spos = cur + diff * 0.5;
+                        self.spos_at = now;
+                    } else if diff < -2.0 {
+                        // 主时钟明显超前（极少见）：拉回
+                        self.spos = p;
+                        self.spos_at = now;
+                    }
+                    self.spos_valid = true;
+                }
                 if self.music.app_id.is_empty() {
                     self.music.app_id = "cloudmusic.exe".to_string();
                 }
@@ -6547,13 +6604,20 @@ impl eframe::App for IslandApp {
                         // 再叠加“播放态切换时强制对齐一次”。避免量化抖动来回校正导致歌词“滚上滚下”。
                         let cur = self.current_pos();
                         let diff = p - cur;
-                        if force_sync || diff.abs() > 2.0 {
+                        if self.soda_playing == Some(false) {
+                            // 已暂停：进度必须精确停在播放器真实位置，绝不做软校正（否则会
+                            // 从 2:31 一点点滑回 2:30，看起来就是“2:30/2:31 来回跳”）。
+                            self.spos = p;
+                            self.spos_at = Instant::now();
+                            self.spos_valid = true;
+                        } else if force_sync || diff.abs() > 2.0 {
                             // 播放态切换 / 拖动跳变：精确对齐一次
                             self.spos = p;
                             self.spos_at = Instant::now();
                             self.spos_valid = true;
-                        } else if diff.abs() > 0.08 {
-                            // 亚秒级小误差：软校正（每次吸收 ~35%），既追上真实进度又不产生来回跳动/整秒锯齿
+                        } else if diff > 0.08 || diff < -0.45 {
+                            // 亚秒级小误差：软校正（每次吸收 ~35%）；只在明显落后或明显超前时修正，
+                            // -0.45..0.08 的死区避免正常量化抖动被反复纠正成整秒锯齿。
                             self.spos = (cur + diff * 0.35).clamp(0.0, self.soda_dur.max(1.0));
                             self.spos_at = Instant::now();
                             self.spos_valid = true;
@@ -6934,7 +6998,9 @@ impl eframe::App for IslandApp {
             || self.upd_busy
             || pointer_active;
         let animating = animating && std::env::var_os("WINISLE_IDLE").is_none();
-        let ms = if animating { 8 } else { 200 };
+        // 目标帧间隔：动画态锚定 16ms（约 60fps，满足“动态模块 ≥60fps”的硬约束）；静止态 200ms（约 5fps）。
+        // 历史上这里是 8ms（约 125fps），实测“收起 + 播放中”会常驻吃满 1 个 CPU 核，故按 60fps 锚定。
+        let target_ms: u64 = if animating { 16 } else { 200 };
         if std::env::var_os("WINISLE_PERF").is_some() {
             let el = _pf_t0.elapsed().as_secs_f32() * 1000.0;
             let (dt, udt) = ctx.input(|i| (i.stable_dt, i.unstable_dt));
@@ -6975,6 +7041,8 @@ impl eframe::App for IslandApp {
         }
         // [DIAG] 帧率计数器：仅 WINISLE_PERF 时每秒往 perf.log 写一行 FPS，用于确认实际帧率是否被
         // vsync 限制在 60，还是被“逐帧 request_repaint”顶成了无上限满速。
+        let _diag_interval_ms = self.frame_last.elapsed().as_secs_f32() * 1000.0;
+        let _diag_work_ms = _pf_t0.elapsed().as_secs_f32() * 1000.0;
         if std::env::var_os("WINISLE_PERF").is_some() {
             use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
             static FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -6996,16 +7064,32 @@ impl eframe::App for IslandApp {
                     .append(true)
                     .open(crate::paths::file("perf.log"))
                 {
+                    let causes: Vec<String> = ctx
+                        .repaint_causes()
+                        .iter()
+                        .map(|c| format!("{}:{}", c.file, c.line))
+                        .collect();
                     let _ = writeln!(
                         fh,
-                        "FPS={} animating={} exp={:.3} amt={:.3} playing={}",
-                        fr, animating, self.expanded, self.music_amt, self.music.playing
+                        "FPS={} interval={:.1}ms work={:.1}ms animating={} exp={:.3} amt={:.3} playing={} causes={:?}",
+                        fr, _diag_interval_ms, _diag_work_ms, animating, self.expanded, self.music_amt, self.music.playing, causes
                     );
                 }
             }
         }
+        // 真正的帧预算限速：用本帧实际耗时(_pf_t0 起算)补足到目标间隔后再请求下一帧，
+        // 让事件循环在“活干完后”休眠剩余时间，而不是无条件立即再画——这是把
+        // “收起 + 播放中”从吃满 1 核拉回来的关键（旧代码 frame_last 只写不读，等于没有限速）。
+        // 自适应帧预算：用「上一帧周期(interval) − 上一帧申请的休眠(prev_req_ms)」估算每帧
+        // 真实工作耗时（含 egui 绘制 + GPU swap），再从目标间隔里扣掉它，让帧周期精确落在
+        // target_ms ≈ 16ms（60fps）。predicted_dt 已归零，request_repaint_after 的时长会被
+        // 如实当作休眠（不会再被 egui 偷偷减 16.67ms），所以这里扣工作耗时是安全且精确的。
+        let est_work_ms =
+            (_diag_interval_ms - self.prev_req_ms).clamp(0.0, target_ms as f32 - 1.0);
+        let req_ms = ((target_ms as f32) - est_work_ms).max(1.0);
+        self.prev_req_ms = req_ms;
         self.frame_last = Instant::now();
-        ctx.request_repaint_after(Duration::from_millis(ms));
+        ctx.request_repaint_after(Duration::from_secs_f32(req_ms / 1000.0));
     }
 }
 
@@ -7543,10 +7627,25 @@ fn install_fonts(ctx: &egui::Context) {
     // 藏文（如 ANU《FLY》整首藏语歌词）不在 等线/Segoe UI/Malgun 里，会显示成方块□；
     // 补一款 Windows 自带藏文字体 himalaya.ttf（Microsoft Himalaya）作兜底。
     let has_himalaya = load(&mut fonts, "himalaya", r"C:\Windows\Fonts\himalaya.ttf");
+
+    // 思源黑体 Noto Sans SC（用户选定，内嵌保证各机器字形一致）：
+    // 作为中文主字库放在 Segoe UI 之后——拉丁/数字仍走 Segoe UI，中文走思源黑体；
+    // 并提供真正的粗体（notob），修复此前“中文标题无真粗体、发细发平”的问题。
+    fonts.font_data.insert(
+        "noto".to_owned(),
+        egui::FontData::from_owned(include_bytes!("../assets/NotoSansSC-Regular.otf").to_vec()).into(),
+    );
+    fonts.font_data.insert(
+        "notob".to_owned(),
+        egui::FontData::from_owned(include_bytes!("../assets/NotoSansSC-Bold.otf").to_vec()).into(),
+    );
+
     if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
         if has_segoe {
             list.insert(0, "segoe".to_owned());
         }
+        // 中文优先思源黑体（紧随 Segoe UI，拉丁仍命中 segoe）；等线保留为次级兜底。
+        list.insert(if has_segoe { 1 } else { 0 }, "noto".to_owned());
         list.push("deng".to_owned());
         list.push("sym".to_owned());
         if has_malgun {
@@ -7557,6 +7656,7 @@ fn install_fonts(ctx: &egui::Context) {
         }
     }
     if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+        list.push("noto".to_owned());
         list.push("deng".to_owned());
         list.push("sym".to_owned());
         if has_malgun {
@@ -7566,7 +7666,8 @@ fn install_fonts(ctx: &egui::Context) {
             list.push("himalaya".to_owned());
         }
     }
-    let mut bold_list = vec!["segoeb".to_owned(), "deng".to_owned()];
+    // 粗体字族：拉丁用 Segoe UI Bold，中文用思源黑体 Bold（真粗体），再兜底常规 noto / 等线。
+    let mut bold_list = vec!["segoeb".to_owned(), "notob".to_owned(), "noto".to_owned(), "deng".to_owned()];
     if has_malgun {
         bold_list.push("malgun".to_owned());
     }
@@ -7647,7 +7748,9 @@ fn main() -> eframe::Result<()> {
             .with_active(false)
             // 先隐藏创建，等首帧按最终贴边位置摆好后再显示，避免“先在左上闪一下再跳到中间”。
             .with_visible(false),
-        multisampling: 4,
+        // MSAA 4→0：叠层透明窗口整块每帧重绘，4x 多重采样只增加 GPU 带宽与合成开销，
+        // 对这类纯 2D 圆角/文字（egui 自身带形状与字体抗锯齿）几乎无视觉收益，故关闭。
+        multisampling: 0,
         vsync: false,
         ..Default::default()
     };
