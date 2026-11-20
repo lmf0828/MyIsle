@@ -1252,9 +1252,13 @@ fn pids_named(name: &str) -> Vec<u32> {    let mut out = Vec::new();
 pub fn player_running() -> bool {
     static WATCH: std::sync::Once = std::sync::Once::new();
     WATCH.call_once(|| {
+        // 首次同步采样一次：否则后台线程还没跑起来时 PLAYER_RUN 仍是初始 false，
+        // 会让启动后第一秒内误判“播放器未运行”，导致音乐模块延迟出现，并在与“丢失去抖”
+        // 叠加时造成收起条先展开→缩回→再展开的假象。一次进程快照仅几毫秒，且只发生一次。
+        PLAYER_RUN.store(player_running_now(), std::sync::atomic::Ordering::Relaxed);
         std::thread::spawn(|| loop {
-            PLAYER_RUN.store(player_running_now(), std::sync::atomic::Ordering::Relaxed);
             std::thread::sleep(std::time::Duration::from_millis(1000));
+            PLAYER_RUN.store(player_running_now(), std::sync::atomic::Ordering::Relaxed);
         });
     });
     PLAYER_RUN.load(std::sync::atomic::Ordering::Relaxed)

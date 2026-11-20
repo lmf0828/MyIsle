@@ -818,11 +818,9 @@ struct IslandApp {
     // 拖动移动
     dragging: bool,
     drag_off: egui::Vec2,
-    /// 抓取点相对岛体左上角的**物理像素**偏移（跨不同 DPI 显示器拖动时保持不变，避免抖动/跳变）
-    drag_off_px: egui::Vec2,
-    /// 抓取点相对岛体宽高的比例（0..1）。拖动时按当前岛体尺寸重新折算 drag_off，
-    /// 这样岛体在拖动中即使展开度变化（如开始拖动时自动收起），也会围绕“被抓的那个点”
-    /// 收缩/展开，而不会整体往一侧跳走。尺寸不变时等价于原来的固定偏移（1:1 跟手）。
+    /// 抓取点相对岛体宽高的比例（0..1）。拖动时按当前岛体尺寸重新折算抓取点，
+    /// 这样岛体在拖动中即使展开度变化（如开始拖动时自动收起），被抓的那个点也会始终咬在指针处，
+    /// 而不会随塌收漂移到指针下方（尺寸不变时等价于固定偏移，1:1 跟手）。
     drag_frac: egui::Vec2,
     drag_last_btn: bool,
     /// 松手后的"归位"动画：从松手位置平滑滑到顶部吸附点。存 (起点原点, 终点原点, 开始时??
@@ -948,6 +946,9 @@ struct IslandApp {
     player_running_at: Instant,
     /// 从“有歌”变成“没有歌”的起始时刻，用于延迟清除残留的音乐状态
     music_lost_since: Option<Instant>,
+    /// 上一帧 music_present 的值：只有“此前确实有音乐”时才做 400ms 丢失去抖。
+    /// 冷启动时它为 false，因此不会凭空把 music_present 置真——否则收起条会先展开、再缩回、再展开。
+    music_was_present: bool,
     /// 最近一次拿到的好歌名（用于播放器短时读不到标题时保持稳定，避免闪烁/来回切换）
     last_title: Option<(String, String, String)>,
     last_title_at: Instant,
@@ -1146,7 +1147,6 @@ impl IslandApp {
             focus_settings: open_panel,
             dragging: false,
             drag_off: egui::vec2(0.0, 0.0),
-            drag_off_px: egui::vec2(0.0, 0.0),
             drag_frac: egui::vec2(0.5, 0.5),
             drag_last_btn: false,
             settle: None,
@@ -1216,6 +1216,7 @@ impl IslandApp {
             player_running_cached: false,
             player_running_at: Instant::now() - Duration::from_secs(10),
             music_lost_since: None,
+            music_was_present: false,
             last_title: None,
             last_title_at: Instant::now() - Duration::from_secs(60),
             music_amt: 0.0,
@@ -2315,17 +2316,11 @@ impl IslandApp {
                         egui::vec2(W_EXPANDED + 2.0 * MARGIN, H_EXPANDED + 2.0 * MARGIN),
                     );
                     let lp0 = self.pill_rect_e(local_full, self.expanded);
-                    // 记录“指针相对岛体左上角”的偏移（而不是相对窗口），这样拖动/展开过程中
-                    // 岛体在窗口内的本地偏移即使变化，岛体也始终咬在指针原来的位置，不会跑到下方。
+                    // 记录“指针相对岛体左上角”的偏移（逻辑坐标），并折算成相对岛体宽高的比例 drag_frac。
+                    // 拖动定位时用 drag_frac 按“当前岛体尺寸”重新折算抓取点——这样即使拖动开始后
+                    // 岛体自动塌收、或宽度随音乐变化，被抓的那个点也始终咬在指针处，不会漂到指针下方。
                     self.dragging = true;
                     self.drag_off = cur - (win0 + lp0.min.to_vec2());
-                    // 物理像素抓取偏移：跨显示器（不同 DPI 缩放）拖动时保持恒定，窗口位置用
-                    // 物理坐标直接 SetWindowPos，避免逻辑↔物理换算在跨越缩放不同的屏幕时抖动跳变。
-                    let (cxp, cyp) = platform::cursor_pos();
-                    self.drag_off_px = egui::vec2(
-                        cxp as f32 - (wl_px as f32 + lp0.min.x * ppp),
-                        cyp as f32 - (wt_px as f32 + lp0.min.y * ppp),
-                    );
                     let pw = lp0.width().max(1.0);
                     let ph = lp0.height().max(1.0);
                     self.drag_frac = egui::vec2(
@@ -2377,15 +2372,23 @@ impl IslandApp {
             let win_w = W_EXPANDED + 2.0 * MARGIN;
             let win_h = H_EXPANDED + 2.0 * MARGIN;
             let placeholder = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(win_w, win_h));
+            // 用「当前展开度」下的岛体本地矩形计算抓取点位置，并把按下时抓到的那个相对点
+            //（drag_frac，按岛体宽高比例记录）始终咬在指针下。
+            // 关键：拖动一开始岛体会自动塌收回收起条（drive_animation 里 target=0），岛体在窗口内的
+            // 本地位置随之变化；若仍用按下瞬间的固定像素偏移，岛体会随塌收一路漂到指针下方（用户反馈）。
+            // 改用 drag_frac 每帧按当前岛体尺寸折算，抓取点在任何展开度/宽度变化下都精确贴在指针处。
             let lp = self.pill_rect_e(placeholder, self.expanded);
-            // 岛体在窗口内的本地偏移/尺寸（物理像素）
+            // 岛体在窗口内的本地偏移/尺寸（物理像素），用于边界夹紧
             let pill_l = (lp.min.x * ppp).round() as i32;
             let pill_t = (lp.min.y * ppp).round() as i32;
             let pill_w = (lp.width() * ppp).round() as i32;
             let pill_h = (lp.height() * ppp).round() as i32;
             let (cxp, cyp) = platform::cursor_pos();
-            let mut nx = cxp - self.drag_off_px.x.round() as i32;
-            let mut ny = cyp - self.drag_off_px.y.round() as i32;
+            // 抓取点（岛体本地逻辑坐标 → 物理像素）：左上角 + 比例 × 当前尺寸。
+            let grab_x = (lp.min.x + self.drag_frac.x * lp.width()) * ppp;
+            let grab_y = (lp.min.y + self.drag_frac.y * lp.height()) * ppp;
+            let mut nx = cxp - grab_x.round() as i32;
+            let mut ny = cyp - grab_y.round() as i32;
             // 边界按“整个虚拟桌面”物理像素计算：岛体整块留在桌面内即可拖到其它显示器。
             let (vl, vt, vr, vb) = platform::virtual_screen_rect();
             let min_x = vl - pill_l;
@@ -6590,13 +6593,21 @@ impl eframe::App for IslandApp {
         let want_music = !self.music.title.is_empty() && player_running_now;
         let mut music_present = want_music;
         if !want_music {
-            let since = *self.music_lost_since.get_or_insert_with(Instant::now);
-            if since.elapsed() < Duration::from_millis(400) {
-                music_present = true;
+            // 只有“此前确实有音乐”时才做 400ms 丢失去抖（防止歌曲元数据/进程枚举瞬抖导致模块闪烁）。
+            // 冷启动时 music_was_present 为 false → 不授予这段“保持显示”的宽限；否则会在真正读到音乐
+            // 之前先把收起条展开、再缩回、再展开（用户反馈的“展开后又缩回去又展开一次”）。
+            if self.music_was_present {
+                let since = *self.music_lost_since.get_or_insert_with(Instant::now);
+                if since.elapsed() < Duration::from_millis(400) {
+                    music_present = true;
+                }
+            } else {
+                self.music_lost_since = None;
             }
         } else {
             self.music_lost_since = None;
         }
+        self.music_was_present = music_present;
         // 不依赖上一帧可能滞后的窗口原点，保证能精确贴到最?最右角?
         {
             let dt = ctx.input(|i| i.stable_dt).min(0.05);
