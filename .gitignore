@@ -41,3 +41,7 @@
 /loc_test.ps1
 /design/font_preview
 /design/esp32_img
+
+# local-only assistant docs
+/AGENTS.md
+/HANDOFF.md
