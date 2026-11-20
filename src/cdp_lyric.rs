@@ -263,11 +263,23 @@ fn norm(s: &str) -> String {
 
 /// 读取当前在播歌曲的官方歌词。`title`/`artist` 用于防止切歌瞬间读到上一首。
 pub fn fetch_current(title: &str, artist: &str) -> Option<SodaLyric> {
-    fetch_current_inner(title, artist, true)
+    match fetch_current_inner(title, artist, true) {
+        SodaProbe::Got(s) => Some(s),
+        _ => None,
+    }
 }
 
 /// 同 `fetch_current`，但绝不切换汽水内部路由（用于后台轮询“正在播放”，避免干扰用户浏览页面）。
 pub fn fetch_current_no_nav(title: &str, artist: &str) -> Option<SodaLyric> {
+    match fetch_current_inner(title, artist, false) {
+        SodaProbe::Got(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// 三态探测（不导航）：供“拿不到歌词时是否有必要继续轮询”的判定使用。
+/// `NoLyric` 说明汽水已明确给出“暂无歌词”，可以停止轮询；`Unknown` 才值得再试。
+pub fn probe_current_no_nav(title: &str, artist: &str) -> SodaProbe {
     fetch_current_inner(title, artist, false)
 }
 
@@ -428,13 +440,22 @@ pub fn fetch_play_state() -> Option<(bool, f64, f64)> {
     Some((playing, cur, dur))
 }
 
-fn fetch_current_inner(title: &str, artist: &str, allow_nav: bool) -> Option<SodaLyric> {
+/// CDP 探测结果三态：
+/// - `Got`：拿到了可用信息（真实歌词，或“纯音乐，请欣赏”占位；`content` 已填好）。
+/// - `NoLyric`：汽水明确表示“暂无歌词，请欣赏”（缺词，但**不是**纯音乐）——已可下结论，无需再轮询。
+/// - `Unknown`：此刻还读不到（页面未就绪 / 未挂载 LyricsView 等）——可稍后再试。
+pub enum SodaProbe {
+    Got(SodaLyric),
+    NoLyric,
+    Unknown,
+}
+
+fn fetch_current_inner(title: &str, artist: &str, allow_nav: bool) -> SodaProbe {
     let want_t = norm(title);
     let name_match = |name: &str| {
         let got_t = norm(name);
         want_t.is_empty() || got_t == want_t || got_t.contains(&want_t) || want_t.contains(&got_t)
     };
-    let mut result = None;
     for attempt in 0..4 {
         let mut retry = false;
         let mut hidden = false;
@@ -444,65 +465,76 @@ fn fetch_current_inner(title: &str, artist: &str, allow_nav: bool) -> Option<Sod
             if let Some(o) = val {
                 hidden = o.get("vis").and_then(|x| x.as_str()) == Some("hidden");
                 if o.get("ok").and_then(|x| x.as_bool()) == Some(true) {
-                    // 1) Vue LyricsView：优先取「歌名匹配 + 有真实歌词内容」的。
-                    if let Some(list) = o.get("list").and_then(|x| x.as_array()) {
+                    let list = o.get("list").and_then(|x| x.as_array());
+                    let pages = o.get("pages").and_then(|x| x.as_array());
+                    let mk = |item: &serde_json::Value, content: &str| -> SodaLyric {
+                        SodaLyric {
+                            name: item.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            artist: item.get("artist").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            duration: item.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                            content: content.to_string(),
+                            cn: item.get("cn").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            cover: item.get("cover").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                        }
+                    };
+                    // 1) Vue LyricsView：歌名匹配 + 真实歌词内容
+                    if let Some(list) = list {
                         for item in list {
                             let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
                             let content = item.get("content").and_then(|x| x.as_str()).unwrap_or("");
                             if name_match(name) && !content.trim().is_empty() {
-                                result = Some(SodaLyric {
+                                return SodaProbe::Got(mk(item, content));
+                            }
+                        }
+                    }
+                    // 2) Vue LyricsView：纯音乐占位（content 空，.no-lyric 为“纯音乐”标记）
+                    if let Some(list) = list {
+                        for item in list {
+                            let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                            let no_lyric = item.get("noLyric").and_then(|x| x.as_str()).unwrap_or("");
+                            if name_match(name) && crate::lyrics::is_instrumental_marker(no_lyric) {
+                                return SodaProbe::Got(mk(item, no_lyric));
+                            }
+                        }
+                    }
+                    // 3) Vue LyricsView：暂无歌词（缺词，非纯音乐）——已可下结论
+                    if let Some(list) = list {
+                        for item in list {
+                            let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                            let no_lyric = item.get("noLyric").and_then(|x| x.as_str()).unwrap_or("");
+                            if name_match(name) && crate::lyrics::is_no_lyric_marker(no_lyric) {
+                                return SodaProbe::NoLyric;
+                            }
+                        }
+                    }
+                    // 4) DOM .player-box 兜底：LyricsView 未挂载时，按歌名核对 .no-lyric 文本
+                    if let Some(pages) = pages {
+                        for p in pages {
+                            let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                            let no_lyric = p.get("noLyric").and_then(|x| x.as_str()).unwrap_or("");
+                            if name_match(name) && crate::lyrics::is_instrumental_marker(no_lyric) {
+                                return SodaProbe::Got(SodaLyric {
                                     name: name.to_string(),
-                                    artist: item.get("artist").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                                    duration: item.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
-                                    content: content.to_string(),
-                                    cn: item.get("cn").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                                    cover: item.get("cover").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                                    artist: String::new(),
+                                    duration: 0.0,
+                                    content: no_lyric.to_string(),
+                                    cn: String::new(),
+                                    cover: String::new(),
                                 });
-                                break;
-                            }
-                        }
-                        // 2) Vue LyricsView：纯音乐占位（content 为空，但 .no-lyric 文本是「纯音乐」标记）。
-                        if result.is_none() {
-                            for item in list {
-                                let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
-                                let no_lyric = item.get("noLyric").and_then(|x| x.as_str()).unwrap_or("");
-                                if name_match(name) && crate::lyrics::is_instrumental_marker(no_lyric) {
-                                    result = Some(SodaLyric {
-                                        name: name.to_string(),
-                                        artist: item.get("artist").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                                        duration: item.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
-                                        content: no_lyric.to_string(),
-                                        cn: item.get("cn").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                                        cover: item.get("cover").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                                    });
-                                    break;
-                                }
                             }
                         }
                     }
-                    // 3) DOM .player-box 兜底：LyricsView 未挂载时，按歌名核对 .no-lyric 文本。
-                    if result.is_none() {
-                        if let Some(pages) = o.get("pages").and_then(|x| x.as_array()) {
-                            for p in pages {
-                                let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("");
-                                let no_lyric = p.get("noLyric").and_then(|x| x.as_str()).unwrap_or("");
-                                if name_match(name) && crate::lyrics::is_instrumental_marker(no_lyric) {
-                                    result = Some(SodaLyric {
-                                        name: name.to_string(),
-                                        artist: String::new(),
-                                        duration: 0.0,
-                                        content: no_lyric.to_string(),
-                                        cn: String::new(),
-                                        cover: String::new(),
-                                    });
-                                    break;
-                                }
+                    // 5) DOM .player-box：暂无歌词
+                    if let Some(pages) = pages {
+                        for p in pages {
+                            let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                            let no_lyric = p.get("noLyric").and_then(|x| x.as_str()).unwrap_or("");
+                            if name_match(name) && crate::lyrics::is_no_lyric_marker(no_lyric) {
+                                return SodaProbe::NoLyric;
                             }
                         }
                     }
-                    if result.is_none() {
-                        retry = true;
-                    }
+                    retry = true;
                 } else {
                     dlog(&format!(
                         "cdp not ready: {}",
@@ -527,7 +559,7 @@ fn fetch_current_inner(title: &str, artist: &str, allow_nav: bool) -> Option<Sod
         }
     }
     let _ = artist;
-    result
+    SodaProbe::Unknown
 }
 
 const NAV_PLAYER_EXPR: &str = r#"(()=>{try{const p={enter_method:'click_player_icon_below',scene_name:'radio'};const h='#/player?et_params='+encodeURIComponent(JSON.stringify(p));const cur=location.hash||'';const onPlayer=(cur.indexOf('#/player?')===0||cur==='#/player');if(!onPlayer){location.hash=h;}return location.hash;}catch(e){return 'err';}})()"#;

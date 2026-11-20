@@ -877,12 +877,14 @@ struct IslandApp {
     tracker: smtc::Tracker,
     /// 歌词后台工作线程
     lyr_tx: std::sync::mpsc::Sender<(String, String, String, f64, bool, bool)>,
-    lyr_rx: std::sync::mpsc::Receiver<(String, Option<Vec<lyrics::LrcLine>>, Option<Vec<u8>>)>,
+    lyr_rx: std::sync::mpsc::Receiver<(String, Option<Vec<lyrics::LrcLine>>, Option<Vec<u8>>, bool)>,
     lyr_key: String,
     lyr_dur: f64, // 当初请求歌词时采用的“期望时长”，用于发现同名不同版本(时长不符)后重�?
     lyr_lines: Vec<lyrics::LrcLine>,
     /// 当前曲目的歌词请求是否已完成（用于区分“正在加载”与“确实没有歌词/纯音乐”）
     lyr_done: bool,
+    /// 歌词请求是否已“尘埃落定”（拿到歌词 / 汽水明确暂无歌词 / 补探用尽）——落定后不再轮询
+    lyr_settled: bool,
     /// 播放进度估算时钟（SMTC 的 position 有些播放器一直给 0，故自维护）
     clock_base: f64,
     clock_start: Instant,
@@ -1013,6 +1015,10 @@ struct IslandApp {
     wave_disp: [f32; 128],
     /// 播放/未播放两种形态的交叉淡入比例：0=未播放，1=播放，按时间平滑过渡，切换时不突然卡过去。
     wave_mix: f32,
+    /// 水波频谱是否正处于“播放↔空闲”交叉淡入的过渡中（用于过渡期间维持 60fps，避免被 5fps 静止帧切碎）。
+    wave_active: bool,
+    /// 开播/切歌后的“鼓点渐入”增益（0→1，约 0.35s）：让从静止形态进入跟鼓点抖动有过渡，而不是瞬间弹起
+    wave_onset: f32,
     /// 上一帧“提交结束”的时刻，用于把渲染循环限速到 60fps（该虚拟显示器 200Hz，vsync 会顶到 200fps）
     frame_last: Instant,
     /// 上一帧向事件循环申请的休眠毫秒数；用于自适应估算“每帧实际耗时(含绘制)”，
@@ -1139,15 +1145,25 @@ impl IslandApp {
         let (lyr_tx, lyr_req_rx) =
             std::sync::mpsc::channel::<(String, String, String, f64, bool, bool)>();
         let (lyr_res_tx, lyr_rx) =
-            std::sync::mpsc::channel::<(String, Option<Vec<lyrics::LrcLine>>, Option<Vec<u8>>)>();
+            std::sync::mpsc::channel::<(String, Option<Vec<lyrics::LrcLine>>, Option<Vec<u8>>, bool)>();
         std::thread::spawn(move || {
             while let Ok((key, title, artist, dur, soda, light)) = lyr_req_rx.recv() {
                 // light=true：仅走 CDP 廉价探测（不扫内存、不碰磁盘），用于歌词页迟到时补取；
                 // light=false：完整链路（CDP + 内存兜底 + 缓存 + 封面）。
-                let (r, cov) = if light {
-                    (lyrics::soda_probe_cdp(&title, &artist), None)
+                // settled=true 表示本次已可下结论（拿到歌词 / 纯音乐占位 / 汽水明确暂无歌词），
+                // false 表示还读不到、可稍后再试；主线程据此停止无谓轮询。
+                let (r, cov, settled) = if light {
+                    match lyrics::soda_probe_cdp(&title, &artist) {
+                        lyrics::SodaProbeResult::Got(v) => (Some(v), None, true),
+                        lyrics::SodaProbeResult::NoLyric => (None, None, true),
+                        lyrics::SodaProbeResult::Unknown => (None, None, false),
+                    }
                 } else {
-                    lyrics::fetch_full(&title, &artist, dur, soda)
+                    let (r, cov) = lyrics::fetch_full(&title, &artist, dur, soda);
+                    // 全量链路：非汽水时它就是最终结果（有没有歌词都已定论）；
+                    // 汽水若没拿到歌词，还要靠后续轻量 CDP 补探（歌词页可能迟到），故 settled=false。
+                    let settled = r.is_some() || !soda;
+                    (r, cov, settled)
                 };
                 // 迷你?
                 {
@@ -1159,7 +1175,7 @@ impl IslandApp {
                         let _ = writeln!(f, "{} - {} => lines={} cover={}B", title, artist, n, cb);
                     }
                 }
-                if lyr_res_tx.send((key, r, cov)).is_err() {
+                if lyr_res_tx.send((key, r, cov, settled)).is_err() {
                     break;
                 }
             }
@@ -1214,6 +1230,7 @@ impl IslandApp {
             lyr_dur: 0.0,
             lyr_lines: Vec::new(),
             lyr_done: false,
+            lyr_settled: false,
             clock_base: 0.0,
             clock_start: Instant::now(),
             clock_playing: false,
@@ -1283,6 +1300,8 @@ impl IslandApp {
             wave_play: [0.0; 128],
         wave_disp: [0.52; 128],
             wave_mix: 0.0,
+        wave_active: false,
+        wave_onset: 0.0,
             frame_last: Instant::now() - Duration::from_millis(20),
             prev_req_ms: 16.0,
             last_busy: Instant::now(),
@@ -1831,7 +1850,7 @@ impl IslandApp {
         uv
     }
 
-    /// 懒加载指定表情的整段动画帧贴图（Otto 原版逐帧，绿字 + 透明底）。
+    /// 懒加载指定表情的整段动画帧贴图（Otto 原版逐帧，白字 + 透明底）。
     fn ensure_face_frames(&mut self, ctx: &egui::Context, idx: usize) {
         const ANIM: &[u8] = include_bytes!("assets/faces_anim.bin");
         let metas = Self::face_anim_meta();
@@ -1853,9 +1872,9 @@ impl IslandApp {
             let src = &ANIM[base..base + stride];
             let mut rgba = Vec::with_capacity(stride * 4);
             for &a in src {
-                rgba.push(126);
-                rgba.push(234);
-                rgba.push(182);
+                rgba.push(255);
+                rgba.push(255);
+                rgba.push(255);
                 rgba.push(a);
             }
             let ci = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
@@ -3141,9 +3160,22 @@ impl IslandApp {
         // 避免暂停↔播放切换时柱形突然卡过去。
         let dt = painter.ctx().input(|i| i.stable_dt).clamp(0.001, 0.05);
         let ease_idle = 1.0 - (-dt / 0.16).exp();
-        let ease_mix = 1.0 - (-dt / 0.24).exp();
+        // 交叉淡入用较柔的时间常数：让“开始跟鼓点抖动”“暂停回空闲”都有一段看得见的过渡，
+        // 而不是一两帧就跳过去（此前暂停瞬间 vv 直接等于空闲高度，只剩 0.11s 释放 → 看着很突然）。
+        let ease_mix = 1.0 - (-dt / 0.30).exp();
         self.wave_mix += ((if playing { 1.0 } else { 0.0 }) - self.wave_mix) * ease_mix;
         let wave_mix = self.wave_mix.clamp(0.0, 1.0);
+        // 鼓点渐入：暂停/切歌后进入“跟鼓点抖动”时，用 ~0.35s 把真实能量从 0 渐入到满，
+        // 让起振有过渡，而不是一开播就从静止形态“啪”地弹到满幅。
+        let want_onset = if playing { 1.0 } else { 0.0 };
+        let ease_onset = 1.0 - (-dt / 0.35).exp();
+        self.wave_onset += (want_onset - self.wave_onset) * ease_onset;
+        self.wave_onset = self.wave_onset.clamp(0.0, 1.0);
+        let onset = self.wave_onset;
+        // 过渡进行中（首次进入鼓点 / 鼓点渐入 / 暂停回落）时标记“水波过渡中”，主循环据此维持 60fps，
+        // 不让这段缓动被 5fps 的静止帧切成一跳一跳。
+        self.wave_active = (self.wave_mix > 0.004 && self.wave_mix < 0.996)
+            || (self.wave_onset > 0.01 && self.wave_onset < 0.999);
         // 稳定的整数哈希→[0,1)，用于每根柱子的随机相位/幅度与逐帧小抖动
         let hash01 = |mut x: u32| -> f32 {
             x ^= x >> 16;
@@ -3260,20 +3292,24 @@ impl IslandApp {
                 } else {
                     knee + (ceil - knee) * (1.0 - (-(vr - knee) / (ceil - knee) * 1.8).exp())
                 };
-                // 播放态直接取目标值：鼓点起音要“炸”，不能像空闲态那样慢慢追。
-                // 平滑只用于未播放形态和两态交叉淡入，避免把底鼓峰值削平。
+                // 关键：给播放高度一个“不低于空闲轮廓”的地板。开播瞬间音频线程往往还没送来
+                // 能量（环回采集在预热），若无地板柱子会先塌到比空闲还矮——这就是“先变短一会”。
+                // 有能量时再在地板之上随鼓点顶起来；真正的淡入由外层交叉淡入负责，无需在此削峰。
+                // 地板：不低于空闲轮廓（防开播瞬间能量未到而先塌矮）；再按 onset 从空闲渐入真实能量。
+                let target = target.max(idle_v);
+                let target = idle_v + (target - idle_v) * onset;
                 self.wave_play[si] = target;
                 target
             } else {
-                // 暂停时让播放态内部值归到空闲形态，恢复播放时从当前空闲轮廓平滑起跳。
-                self.wave_play[si] = idle_v;
-                idle_v
+                // 暂停时【不要】把播放高度归零或归空闲：保留最后一帧的真实鼓点高度，交给外层
+                // 交叉淡入把“高→空闲”平滑拉下来（旧写法 play_v=空闲 会让 vv 当场变矮，很突然）。
+                self.wave_play[si]
             };
             // 未播放↔播放交叉淡入：切换过程中柱形连续形变，而不是瞬间跳到另一套高度。
             let vv = idle_v * (1.0 - wave_mix) + play_v * wave_mix;
-            // 再对每根柱子的显示高度做一次攻击/释放平滑：保证播放↔暂停切换（尤其播放→暂停）也连续，不会直接跳短。
+            // 再对每根柱子的显示高度做一次攻击/释放平滑：起音略快（保鼓点力度）、回落较慢（回空闲更柔）。
             let prev_disp = self.wave_disp[si];
-            let tau_disp = if vv > prev_disp { 0.05_f32 } else { 0.11_f32 };
+            let tau_disp = if vv > prev_disp { 0.045_f32 } else { 0.16_f32 };
             let ease_disp = 1.0 - (-dt / tau_disp).exp();
             let disp = prev_disp + (vv - prev_disp) * ease_disp;
             self.wave_disp[si] = disp;
@@ -6717,6 +6753,8 @@ impl eframe::App for IslandApp {
                 self.lyr_key.clear();
                 self.lyr_dur = 0.0;
                 self.lyr_done = false;
+                self.lyr_settled = false;
+                self.wave_onset = 0.0;
                 self.trial_start = 0.0;
                 self.trial_probe = None;
                 self.soda_full_dur = 0.0;
@@ -7007,8 +7045,10 @@ impl eframe::App for IslandApp {
             self.trial_probe = Some((Instant::now(), 0));
             self.lyr_lines.clear();
             self.lyr_done = false;
+            self.lyr_settled = false;
             self.lyr_retry_n = 0;
             self.lyr_retry_at = Instant::now() - Duration::from_secs(10);
+            self.wave_onset = 0.0;
             self.lyr_inflight = false;
             self.cover_tex = None;
             self.pending_title = None;
@@ -7098,35 +7138,63 @@ impl eframe::App for IslandApp {
         }
         // 汽水：歌词页往往比切歌晚一两秒才更新，没拿到歌词时自动重试几次
         // （否则会一直停在「歌词加载中」或贴上一首）�?
-        if !self.music.title.is_empty()
+        if !self.lyr_settled
+            && !self.music.title.is_empty()
             && self.lyr_lines.is_empty()
             && !self.lyr_inflight
-            && self.lyr_retry_n < 60
-            && self.lyr_retry_at.elapsed() > Duration::from_millis(2500)
+            && self.lyr_retry_n < 7
         {
             let a = self.music.app_id.to_ascii_lowercase();
             if a.contains("汽水") || a.contains("soda") || a.contains("qishui") {
-                self.lyr_retry_at = Instant::now();
-                self.lyr_retry_n += 1;
-                self.lyr_done = false;
-                let dur_now = self.lyric_duration();
-                self.lyr_inflight = true;
-                // 重试用轻量 CDP 探测（不扫内存），歌词页/“纯音乐，请欣赏”迟到也能补上。
-                let _ = self.lyr_tx.send((
-                    self.lyr_key.clone(),
-                    self.music.title.clone(),
-                    self.music.artist.clone(),
-                    dur_now,
-                    true,
-                    true,
-                ));
+                let delay_ms: u64 = match self.lyr_retry_n {
+                    0 => 2000,
+                    1 => 3000,
+                    2 => 5000,
+                    3 => 8000,
+                    4 => 13000,
+                    5 => 21000,
+                    _ => 34000,
+                };
+                if self.lyr_retry_at.elapsed() > Duration::from_millis(delay_ms) {
+                    self.lyr_retry_at = Instant::now();
+                    self.lyr_retry_n += 1;
+                    self.lyr_done = false;
+                    let dur_now = self.lyric_duration();
+                    self.lyr_inflight = true;
+                    // 重试用轻量 CDP 探测（不扫内存），歌词页/“纯音乐，请欣赏”迟到也能补上。
+                    let _ = self.lyr_tx.send((
+                        self.lyr_key.clone(),
+                        self.music.title.clone(),
+                        self.music.artist.clone(),
+                        dur_now,
+                        true,
+                        true,
+                    ));
+                }
             }
+        }
+        // 补探次数用尽仍无结论：标记“已完成”，收起态显示“暂无歌词”，彻底停止轮询。
+        if !self.lyr_settled
+            && !self.lyr_inflight
+            && self.lyr_retry_n >= 7
+            && self.lyr_lines.is_empty()
+            && !self.music.title.is_empty()
+            && !self.lyr_done
+        {
+            self.lyr_done = true;
+            self.lyr_settled = true;
         }        // 收集歌词后台线程结果
-        while let Ok((k, opt, cov)) = self.lyr_rx.try_recv() {
+        while let Ok((k, opt, cov, settled)) = self.lyr_rx.try_recv() {
             self.lyr_inflight = false;
             let same = k == self.lyr_key;
             if same {
-                self.lyr_done = true;
+                let got = opt.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+                if got || settled {
+                    self.lyr_done = true;
+                }
+                if settled {
+                    self.lyr_settled = true;
+                }
             }
             if same || self.lyr_lines.is_empty() {
                 self.lyr_lines = opt.unwrap_or_default();
@@ -7330,6 +7398,7 @@ impl eframe::App for IslandApp {
             || (self.cb_anim > 0.002 && self.cb_anim < 0.998)
             || (self.expanded - self.target).abs() > 0.002
             || self.music_motion
+            || (self.expanded > 0.99 && self.cfg.water_spectrum && self.wave_active)
             || self.dragging
             || self.settle.is_some()
             || self.upd_ver.is_some()
@@ -7500,13 +7569,13 @@ fn draw_face_img_cropped(
 }
 
 /// 收起态「待机表情」：简洁的机器人脸（两只眼睛 + 一张嘴），带眨眼/呼吸微动，
-/// 用 egui 基本图元绘制，颜色统一用主题绿以呼应整体风格。expr 见 FACES。
+/// 用 egui 基本图元绘制，颜色统一用白色以呼应整体风格。expr 见 FACES。
 fn draw_robot_face(painter: &egui::Painter, c: egui::Pos2, h: f32, a: u8, expr: u8, t: f64, tex: Option<&egui::TextureHandle>) {
     if a == 0 || h <= 1.0 {
         return;
     }
     let bob = ((t * 1.7).sin() as f32) * h * 0.028;
-    // 有贴图则 1:1 直接绘制 Otto 原版像素表情（绿字 + 透明底），保持原始比例
+    // 有贴图则 1:1 直接绘制 Otto 原版像素表情（白字 + 透明底），保持原始比例
     if let Some(tx) = tex {
         let s = tx.size_vec2();
         let fw = h * (s.x / s.y.max(1.0));
@@ -7521,7 +7590,7 @@ fn draw_robot_face(painter: &egui::Painter, c: egui::Pos2, h: f32, a: u8, expr: 
         return;
     }
     let pi = std::f32::consts::PI;
-    let col = egui::Color32::from_rgba_unmultiplied(126, 234, 182, a);
+    let col = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
     let cy = c.y + bob;
     let eye_dx = h * 0.26;
     let eye_cy = cy - h * 0.10;

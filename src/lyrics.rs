@@ -111,23 +111,48 @@ pub fn is_instrumental(lines: &[LrcLine]) -> bool {
     !lines.is_empty() && lines.iter().all(|l| is_instrumental_marker(&l.text))
 }
 
+/// 判断一段文本是否为汽水的“暂无歌词”占位（如 `暂无歌词，请欣赏`）。
+/// 这表示汽水也**没有**这首歌的歌词（缺词），但它不是纯音乐——用来区分“纯音乐”与“暂无歌词”，
+/// 从而对“暂无歌词”直接下结论、停止无谓轮询。
+pub fn is_no_lyric_marker(text: &str) -> bool {
+    let core: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    core.contains("暂无歌词")
+}
+
+/// 汽水「轻量」歌词探测的三态结果（见 `soda_probe_cdp`）。
+pub enum SodaProbeResult {
+    /// 拿到了可用歌词：可能是真实歌词，也可能是「纯音乐，请欣赏」占位。
+    Got(Vec<LrcLine>),
+    /// 汽水明确给出“暂无歌词（非纯音乐）”——已可下结论，无需再轮询。
+    NoLyric,
+    /// 此刻还读不到，可稍后再试。
+    Unknown,
+}
+
 /// 汽水专用「轻量」歌词探测：只通过 CDP 读当前播放页的 LyricsView / .no-lyric 文本，
 /// 不做任何内存扫描、不读写磁盘缓存。用于「切歌后歌词页比歌词晚到」时的高频补取：
 /// 汽水歌词页可能几秒后才渲染出来，甚至要等用户点开播放页才出现「纯音乐，请欣赏」，
 /// 用这个廉价探测每隔几秒补一次，既不烧 CPU，又能及时把纯音乐/迟到歌词补上。
 ///
-/// 返回：`Some(instrumental_line())` 表示当前曲目确为纯音乐；`Some(真实歌词)` 表示
-/// 歌词迟到但已可读；`None` 表示此刻还读不到（调用方稍后再试）。
-pub fn soda_probe_cdp(title: &str, artist: &str) -> Option<Vec<LrcLine>> {
-    let sl = crate::cdp_lyric::fetch_current_no_nav(title, artist)?;
-    if looks_instrumental(&sl.content) {
-        return Some(instrumental_line());
-    }
-    let l = crate::cdp_lyric::parse_content(&sl.content);
-    if l.len() >= 2 {
-        Some(l)
-    } else {
-        None
+/// 返回三态（见 `SodaProbeResult`）：`Got(instrumental_line())` 表示当前曲目确为纯音乐；
+/// `Got(真实歌词)` 表示歌词迟到但已可读；`NoLyric` 表示汽水明确“暂无歌词”（非纯音乐）；
+/// `Unknown` 表示此刻还读不到（调用方稍后再试）。
+pub fn soda_probe_cdp(title: &str, artist: &str) -> SodaProbeResult {
+    match crate::cdp_lyric::probe_current_no_nav(title, artist) {
+        crate::cdp_lyric::SodaProbe::Got(sl) => {
+            if looks_instrumental(&sl.content) {
+                SodaProbeResult::Got(instrumental_line())
+            } else {
+                let l = crate::cdp_lyric::parse_content(&sl.content);
+                if l.is_empty() {
+                    SodaProbeResult::Unknown
+                } else {
+                    SodaProbeResult::Got(l)
+                }
+            }
+        }
+        crate::cdp_lyric::SodaProbe::NoLyric => SodaProbeResult::NoLyric,
+        crate::cdp_lyric::SodaProbe::Unknown => SodaProbeResult::Unknown,
     }
 }
 

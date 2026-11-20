@@ -180,7 +180,7 @@ unsafe fn bands_loop() {
             let init = client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
                 AUDCLNT_STREAMFLAGS_LOOPBACK,
-                20_000_000,
+                0, // shared 模式交给引擎默认周期（10ms 级），比手动 2s 缓冲延迟小得多
                 0,
                 pfmt,
                 None,
@@ -223,45 +223,81 @@ unsafe fn bands_loop() {
         }
 
         // ---- 采集循环 ----
+        // 每轮把所有可用包全部排空再睡：环回在 shared 模式下以很小的时间片供包，若每轮只取一包就 sleep，
+        // 包会越积越多 → 频谱相对声音越来越滞后（“反应延迟 / 对不上鼓点”）。排空后延迟≈一个引擎周期。
+        let mut last_t = std::time::Instant::now();
         loop {
-            let mut data: *mut u8 = std::ptr::null_mut();
-            let mut frames: u32 = 0;
-            let mut flags: u32 = 0;
-            match cap.GetBuffer(&mut data, &mut frames, &mut flags, None, None) {
-                Ok(()) => {}
-                Err(_) => break, // 设备变化/流断开 → 重连
-            }
-            if frames > 0 {
-                let n = frames as usize * ch;
-                if data.is_null() {
-                    for _ in 0..frames {
-                        mono.push(0.0);
+            let mut got_any = false;
+            let mut reconnect = false;
+            let mut drained = 0u32;
+            loop {
+                let pkt: u32 = match cap.GetNextPacketSize() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        reconnect = true;
+                        break;
                     }
-                } else if bits == 32 {
-                    let s = std::slice::from_raw_parts(data as *const f32, n);
-                    for f in 0..frames as usize {
-                        let mut acc = 0f32;
-                        for c in 0..ch {
-                            acc += s[f * ch + c];
-                        }
-                        mono.push(acc / ch as f32);
-                    }
-                } else if bits == 16 {
-                    let s = std::slice::from_raw_parts(data as *const i16, n);
-                    for f in 0..frames as usize {
-                        let mut acc = 0f32;
-                        for c in 0..ch {
-                            acc += s[f * ch + c] as f32 / 32768.0;
-                        }
-                        mono.push(acc / ch as f32);
-                    }
-                } else {
-                    for _ in 0..frames {
-                        mono.push(0.0);
+                };
+                if pkt == 0 {
+                    break;
+                }
+                let mut data: *mut u8 = std::ptr::null_mut();
+                let mut frames: u32 = 0;
+                let mut flags: u32 = 0;
+                match cap.GetBuffer(&mut data, &mut frames, &mut flags, None, None) {
+                    Ok(()) => {}
+                    Err(_) => {
+                        reconnect = true;
+                        break;
                     }
                 }
-                let _ = cap.ReleaseBuffer(frames);
+                if frames > 0 {
+                    let n = frames as usize * ch;
+                    if data.is_null() {
+                        for _ in 0..frames {
+                            mono.push(0.0);
+                        }
+                    } else if bits == 32 {
+                        let s = std::slice::from_raw_parts(data as *const f32, n);
+                        for f in 0..frames as usize {
+                            let mut acc = 0f32;
+                            for c in 0..ch {
+                                acc += s[f * ch + c];
+                            }
+                            mono.push(acc / ch as f32);
+                        }
+                    } else if bits == 16 {
+                        let s = std::slice::from_raw_parts(data as *const i16, n);
+                        for f in 0..frames as usize {
+                            let mut acc = 0f32;
+                            for c in 0..ch {
+                                acc += s[f * ch + c] as f32 / 32768.0;
+                            }
+                            mono.push(acc / ch as f32);
+                        }
+                    } else {
+                        for _ in 0..frames {
+                            mono.push(0.0);
+                        }
+                    }
+                    let _ = cap.ReleaseBuffer(frames);
+                    got_any = true;
+                } else {
+                    let _ = cap.ReleaseBuffer(frames);
+                    break;
+                }
+                drained += 1;
+                if drained > 2048 {
+                    break; // 安全上限，防异常时死循环
+                }
             }
+            if reconnect {
+                break; // 设备变化/流断开 → 重连
+            }
+
+            let now = std::time::Instant::now();
+            let dt = (now - last_t).as_secs_f32().clamp(0.001, 0.10);
+            last_t = now;
 
             if mono.len() > NFFT * 4 {
                 let drop = mono.len() - NFFT * 2;
@@ -276,6 +312,10 @@ unsafe fn bands_loop() {
                     re[i] = mono[start + i] * hann[i];
                 }
                 fft(&mut re, &mut im);
+                // 时间常数化的平滑（与帧率无关，避免改了采集节奏后手感漂移）
+                let a_up = 1.0 - (-dt / 0.02_f32).exp();
+                let a_dn = 1.0 - (-dt / 0.12_f32).exp();
+                let a_avg = 1.0 - (-dt / 0.50_f32).exp();
                 let mut lowmax = 0f32;
                 for b in 0..NBANDS {
                     let mut sum = 0f32;
@@ -285,26 +325,27 @@ unsafe fn bands_loop() {
                         cnt += 1;
                     }
                     let e = if cnt > 0 { sum / cnt as f32 } else { 0.0 } / (NFFT as f32 * 0.5);
-                    // 上升快、回落也较快 → 鼓点有弹跳感，不会糊成一片
-                    let alpha = if e > smooth[b] { 0.82 } else { 0.30 };
-                    smooth[b] += (e - smooth[b]) * alpha;
-                    // 缓慢基线（约 0.5s）做动态范围压缩：瞬态鼓点相对基线被显著拉高，静音迅速回落
-                    avg[b] += (smooth[b] - avg[b]) * 0.03;
+                    // 上升快、回落稍慢 → 鼓点有弹跳感又不过度抖动
+                    let a = if e > smooth[b] { a_up } else { a_dn };
+                    smooth[b] += (e - smooth[b]) * a;
+                    // 缓慢基线做动态范围压缩：瞬态鼓点相对基线被显著拉高，静音迅速回落
+                    avg[b] += (smooth[b] - avg[b]) * a_avg;
                     let val = (smooth[b] / (avg[b] * 2.2 + 0.003)).clamp(0.0, 1.0);
-                    // 轻微开方：中小能量也可见，同时尽量保留峰值对比
                     let val = val.powf(0.8);
                     if b <= 10 {
                         lowmax = lowmax.max(val);
                     }
                     BANDS[b].store(val.to_bits(), Ordering::Relaxed);
                 }
-                // 低频鼓点包络：快攻击(0.92)、快释放(0.16)，让柱子随底鼓明显起跳
-                let ka = if lowmax > kick_env { 0.92 } else { 0.16 };
+                // 低频鼓点包络：快起、较快落（时间常数化），让柱子随底鼓明显起跳
+                let k_up = 1.0 - (-dt / 0.012_f32).exp();
+                let k_dn = 1.0 - (-dt / 0.07_f32).exp();
+                let ka = if lowmax > kick_env { k_up } else { k_dn };
                 kick_env += (lowmax - kick_env) * ka;
                 KICK.store(kick_env.to_bits(), Ordering::Relaxed);
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
         let _ = client.Stop();
