@@ -135,13 +135,44 @@ fn parse_ts(s: &str) -> Option<f64> {
     Some(m * 60.0 + sec)
 }
 
+/// 开头/结尾的制作署名行（词/曲/编曲/制作人/混音/发行/营销…）。
+/// 这些行在 LRC 里常被压在同一两秒内，播放时会让歌词像“一刷到底”，
+/// 因此默认不参与逐字滚动；只用“带冒号的标签行”判定，避免误伤
+/// “词不达意的话”这类正常歌词。
+fn is_credit_line(text: &str) -> bool {
+    let s = text.trim();
+    let head = match s.split_once('：').or_else(|| s.split_once(':')) {
+        Some((h, _)) => h.trim(),
+        None => return false,
+    };
+    if head.is_empty() || head.chars().count() > 48 {
+        return false;
+    }
+    const KEYS: &[&str] = &[
+        "作词", "词", "作曲", "曲", "编曲", "制作人", "监制", "混音", "录音", "母带",
+        "吉他", "贝斯", "鼓", "键盘", "和声", "合声", "配唱", "人声", "弦乐", "出品",
+        "发行", "OP", "SP", "营销", "统筹", "协力", "推广", "企划", "策划", "封面",
+        "设计", "制作助理", "助理", "Lyrics", "Composed", "Arranged", "Producer",
+        "Music", "Mixing", "Recording", "Mastering", "Publishing", "Written",
+    ];
+    let lower = head.to_ascii_lowercase();
+    KEYS.iter().any(|k| {
+        head.starts_with(k) || lower.starts_with(&k.to_ascii_lowercase())
+    })
+}
+
 fn is_noise(text: &str) -> bool {
     let t = text.trim();
     if t.is_empty() {
         return true;
     }
-    // 作词/作曲/编曲/制作等署名信息保留在歌词列表中展示（不再过滤）
     if t.contains("纯音乐") || t.contains("此歌曲为没有填词的纯音乐") {
+        return true;
+    }
+    if t.contains("未经著作权人") || (t.contains("未经许可") && t.contains("翻唱")) {
+        return true;
+    }
+    if is_credit_line(t) {
         return true;
     }
     false
@@ -693,11 +724,11 @@ fn fetch_remote(
             let cover: Option<Vec<u8>> = None;
             return (Some(l), cover);
         }
-        dlog(&format!("soda none {} - {} (pure memory, no network)", title, artist));
+        dlog(&format!("soda none {} - {} (official only, network fallback disabled)", title, artist));
         // 汽水官方源拿不到（典型：停留在歌单/场景页，LyricsView 未挂载，内存也没扫到）时，
         // 回退到网络歌词源（网易云/QQ/LRCLIB），但用「歌词末句时间 vs 实际时长」做校验，
         // 时长对不上（同名不同歌/翻唱/片段）就丢弃，尽量避免把别的歌贴上来。
-        if std::env::var_os("WINISLE_SODA_NONETLYRIC").is_none() {
+        if std::env::var_os("WINISLE_SODA_NETLYRIC").is_some() {
             let (nl, nc) = fetch_remote_net(title, artist, expected_dur, key, dir);
             if let Some(v) = nl {
                 let last = v.last().map(|l| l.t).unwrap_or(0.0);
@@ -1101,6 +1132,28 @@ mod probes {
 #[cfg(test)]
 mod instrumental_tests {
     use super::*;
+
+    #[test]
+    fn credit_lines_are_filtered() {        let l = super::parse_lrc(
+            "[00:01.86]词Lyrics by：姜洄\n\
+             [00:01.87]曲Composed by：李哲\n\
+             [00:01.88]编曲 Arranger：史嵩昊/韩冰\n\
+             [00:01.89]制作人Producer：贺贺\n\
+             [00:01.90]合声 Backing Vocals：王宇宙Leto/乔浚丞\n\
+             [00:01.92]录音师 Recording engineer：刘彦宏\n\
+             [00:01.93]混音师 Mixing engineer：刘彦宏\n\
+             [00:01.94]监制 Music supervisor：金华\n\
+             [00:01.95]发行人 Publisher：潘昊铖\n\
+             [00:01.97]OP：北京华数文化传媒有限公司/即刻半音\n\
+             [00:02.00]营销协力 Marketing collaboration：阿子/隋冬雪//可可豆/派大星\n\
+             [00:02.05]营销推广机构 Marketing and promotion agencies：百纳娱乐/网益文化/华数音乐\n\
+             [00:02.07]【未经著作权人许可，不得翻唱翻录或使用】\n\
+             [00:02.08]风吹过山 船靠了岸\n",
+        );
+        let f = super::filt(l);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].text, "风吹过山 船靠了岸");
+    }
 
     #[test]
     fn looks_instrumental_detects_markers() {

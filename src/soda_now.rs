@@ -98,7 +98,16 @@ pub fn spawn() {
             let mut last_cur: f64 = f64::NAN;
             let mut last_change = Instant::now();
             let mut last_name = String::new();
+            let mut last_ensure = Instant::now() - Duration::from_secs(10);
             loop {
+                // 与 NEED 无关：只要汽水在跑，就每 ~2s 检查一次。汽水隐藏到托盘时提前把
+                // 内部路由留在播放页，让 LyricsView 常驻，切歌后歌词立即能读到，避免延迟。
+                if last_ensure.elapsed() >= Duration::from_secs(2) {
+                    last_ensure = Instant::now();
+                    if crate::soda_patch::cdp_up() {
+                        crate::cdp_lyric::ensure_player_view_when_hidden();
+                    }
+                }
                 if !NEED.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_millis(300));
                     continue;
@@ -120,7 +129,7 @@ pub fn spawn() {
                     if !sl.name.trim().is_empty() {
                         let prog = crate::cdp_lyric::fetch_progress(sl.duration);
                         let (pos, total) = match prog {
-                            Some((c, t)) => (c, if t > 1.0 { t } else { sl.duration }),
+                            Some((c, t, _age)) => (c, if t > 1.0 { t } else { sl.duration }),
                             None => (0.0, sl.duration),
                         };
                         let dur = if total > 1.0 { total } else { sl.duration };

@@ -894,9 +894,28 @@ struct IslandApp {
     /// 上次从汽水界面读取真实播放位置的时间（节流用）。
     soda_pos_at: Instant,
     /// 汽水进度查询放在后台线程，避免 CDP 网络抖动阻塞 UI 渲染（丝滑度关键）。
-    soda_prog_rx: Option<std::sync::mpsc::Receiver<(Option<(f64, f64)>, Option<bool>)>>,
+    soda_prog_rx: Option<
+        std::sync::mpsc::Receiver<(
+            Option<(f64, f64, f64)>,
+            Option<bool>,
+            Option<crate::cdp_lyric::SodaTrialMeta>,
+        )>,
+    >,
     /// 从汽水播放条读到的真实总时长（秒），用于纠正 SMTC 给错的时长。
     soda_dur: f64,
+    /// 汽水当前曲目整首歌的完整时长（秒，来自 track.duration）。
+    soda_full_dur: f64,
+    /// 汽水 VIP 试听片段在整首歌里的起点（秒）。
+    soda_clip_start: f64,
+    /// 汽水 VIP 试听片段长度（秒）。
+    soda_clip_dur: f64,
+    /// 汽水当前是否在播放 30 秒试听片段（底部条总时长明显短于整首歌）。
+    soda_trial_active: bool,
+    /// 汽水播放器当前是否处于“试听片段”模式（来自 DOM 的试听区间标记）。
+    soda_trial_hint: bool,
+    /// 上一次从汽水播放条读到的进度值；用于识别「DOM 进度条约 1 秒才跳一次」
+    /// 造成的重复旧值，避免把重复旧值当成落后而把歌词时间轴往回拉。
+    soda_last_p: f64,
     /// 汽水歌词「还没拿到」时的自动重试节流与次数。
     lyr_retry_at: Instant,
     lyr_retry_n: u8,
@@ -1169,6 +1188,12 @@ impl IslandApp {
             soda_pos_at: Instant::now() - Duration::from_secs(3600),
             soda_prog_rx: None,
             soda_dur: 0.0,
+            soda_full_dur: 0.0,
+            soda_clip_start: 0.0,
+            soda_clip_dur: 0.0,
+            soda_trial_active: false,
+            soda_trial_hint: false,
+            soda_last_p: -1.0,
             lyr_retry_at: Instant::now() - Duration::from_secs(3600),
             lyr_retry_n: 0,
             lyr_inflight: false,
@@ -1853,6 +1878,16 @@ impl IslandApp {
         self.current_pos() + self.trial_start as f64
     }
 
+    /// 进度条显示用的绝对位置：汽水试听片段要把片段起点补回整首歌时间轴。
+    /// （网易云沿用原来的相对位置显示，避免改变已验收的行为。）
+    fn display_pos(&self) -> f64 {
+        if self.app_is_soda() {
+            self.lyric_time()
+        } else {
+            self.current_pos()
+        }
+    }
+
     /// 总时长估计：取 SMTC 时长与「歌词最后一句+6s」的较大者
     /// （汽水非会员常只给 30s 试听时长，用歌词长度兜底，进度条才不会被提前走完）。
     fn app_is_soda(&self) -> bool {
@@ -1905,6 +1940,10 @@ impl IslandApp {
     fn duration_est(&self) -> f64 {
         // 汽水：只用汽水自己播放条读到的真实总时长；读不到就�?SMTC 上报值。不借用任何网易云缓存�?
         if self.app_is_soda() {
+            // 试听片段：进度条要显示整首歌的总时长，而不是片段自身的 30s。
+            if self.soda_trial_active && self.soda_full_dur > self.soda_dur + 20.0 {
+                return self.soda_full_dur;
+            }
             return if self.soda_dur >= 1.0 { self.soda_dur } else { self.music.duration };
         }
         // 优先用播放器上报的真实总时长；仅当缺失/明显异常才用歌词兜底。
@@ -1965,7 +2004,7 @@ impl IslandApp {
         let pos = self.lyric_time() + self.cfg.lyric_shift_ms as f64 / 1000.0;
         let mut idx = 0usize;
         for (i, l) in self.lyr_lines.iter().enumerate() {
-            if l.t <= pos + 0.2 {
+            if l.t <= pos + 0.05 {
                 idx = i;
             } else {
                 break;
@@ -2001,15 +2040,25 @@ impl IslandApp {
             }
             return (sung / total).clamp(0.0, 1.0);
         }
-        // 无逐字时间：按字数估算本句“唱完时长”，长间奏不计入
-        let mut est = 0.3_f64;
+        // 无逐字时间：用“到下一行的时间”铺满本句，空格按短暂停顿估，
+        // 避免只按字数估算导致整句提前变绿、和实际人声对不上。
+        let mut est = 0.30_f64;
         for ch in self.lyr_lines[idx].text.chars() {
-            if ch.is_whitespace() { continue; }
-            est += if (ch as u32) < 0x2E80 { 0.12 } else { 0.28 };
+            if ch.is_whitespace() {
+                est += 0.16;
+            } else {
+                est += if (ch as u32) < 0x2E80 { 0.12 } else { 0.28 };
+            }
         }
         let next = self.lyr_lines.get(idx + 1).map(|l| l.t).unwrap_or(cur + est);
         let gap = (next - cur).max(0.0);
-        let dur = est.min(gap).max(0.6);
+        // 正常句用行间隔的 94% 铺满；遇到超长间奏时用字数估算的两倍兜底，
+        // 防止绿色在一个很长的空白段里慢慢爬。
+        let dur = if gap > 0.55 {
+            (gap * 0.94).min(est * 2.2).max(0.55)
+        } else {
+            est.max(0.55)
+        };
         ((pos - cur) / dur).clamp(0.0, 1.0) as f32
     }
 
@@ -3883,7 +3932,7 @@ impl IslandApp {
 
         // 进度条 + 时间（滑块式）
         let dur = self.duration_est();
-        let pos = self.current_pos();
+        let pos = self.display_pos();
         let prog = if dur > 1.0 { (pos / dur).clamp(0.0, 1.0) as f32 } else { 0.0 };
         let bar_y = rect.top() + CONTENT_PAD_T + 69.0 - 10.0;
         let bar = egui::Rect::from_min_max(egui::pos2(tx, bar_y), egui::pos2(cx1, bar_y + 3.0));
@@ -6434,7 +6483,7 @@ impl eframe::App for IslandApp {
                 {
                     let _ = writeln!(
                         f,
-                        "pos={:.2} spos={:.2} spos_valid={} since_spos={:.2} playing={} from_smtc={} m.playing={} m.pos={:.2} haspos={} ci={:?} ci_anim={:.2} lyr_t={:.2} nlyr={} title={:?} soda={} app={:?} sprx={}",
+                        "pos={:.2} spos={:.2} spos_valid={} since_spos={:.2} playing={} from_smtc={} m.playing={} m.pos={:.2} haspos={} ci={:?} ci_anim={:.2} lyr_t={:.2} nlyr={} title={:?} soda={} app={:?} sprx={} trial={} hint={} clipstart={:.2} clipdur={:.2} full={:.2} trstart={:.2}",
                         self.current_pos(),
                         self.spos,
                         self.spos_valid,
@@ -6452,6 +6501,12 @@ impl eframe::App for IslandApp {
                         self.app_is_soda(),
                         self.music.app_id,
                         self.soda_prog_rx.is_some(),
+                        self.soda_trial_active,
+                        self.soda_trial_hint,
+                        self.soda_clip_start,
+                        self.soda_clip_dur,
+                        self.soda_full_dur,
+                        self.trial_start,
                     );
                 }
             }
@@ -6564,6 +6619,12 @@ impl eframe::App for IslandApp {
                 self.lyr_done = false;
                 self.trial_start = 0.0;
                 self.trial_probe = None;
+                self.soda_full_dur = 0.0;
+                self.soda_clip_start = 0.0;
+                self.soda_clip_dur = 0.0;
+                self.soda_trial_active = false;
+                self.soda_trial_hint = false;
+                self.soda_last_p = -1.0;
                 self.cover_tex = None;
                 self.music = smtc::Track::default();
                 self.media_title_cache = None;
@@ -6697,13 +6758,30 @@ impl eframe::App for IslandApp {
                 std::thread::spawn(move || {
                     let pr = crate::cdp_lyric::fetch_progress(dur);
                     let pl = crate::cdp_lyric::fetch_play_state().map(|(p, _, _)| p);
-                    let _ = tx.send((pr, pl));
+                    let tm = crate::cdp_lyric::fetch_trial_meta();
+                    let _ = tx.send((pr, pl, tm));
                 });
             }
             let recv = self.soda_prog_rx.as_ref().map(|rx| rx.try_recv());
             match recv {
-                Some(Ok((pr, pl))) => {
+                Some(Ok((pr, pl, tm))) => {
                     self.soda_prog_rx = None;
+                    if let Some(m) = tm {
+                        // 组件树里可能残留上一首的 track；曲名对不上就不要用它的时长/试听信息。
+                        let a = m.track_name.trim();
+                        let b = self.music.title.trim();
+                        let same_track = a.is_empty()
+                            || b.is_empty()
+                            || a == b
+                            || a.contains(b)
+                            || b.contains(a);
+                        if same_track {
+                            self.soda_full_dur = m.full_duration;
+                            self.soda_clip_start = m.clip_start;
+                            self.soda_clip_dur = m.clip_duration;
+                            self.soda_trial_hint = m.limited_free;
+                        }
+                    }
                     let prev_pl = self.soda_playing;
                     let mut force_sync = false;
                     // 暂停请求后 3 秒内视作“待确认”：这段时间播放器进度可能仍在推进，
@@ -6720,12 +6798,38 @@ impl eframe::App for IslandApp {
                         // 与真实播放态一致地同步 music.playing，供 UI 图标/呼吸灯使用
                         self.music.playing = p;
                     }
-                    if let Some((p, tot)) = pr {
+                    if let Some((p, tot, _age)) = pr {
+                        // DOM 进度值是「上一次跳变瞬间」的进度；age 是距跳变的秒数，
+                        // 因此当前真实进度 ≈ p + age（播放速率按 1.0 计）。
+                        let p_now = p.min(tot.max(1.0));
                         self.soda_dur = tot;
-                        // 用亚秒级真实进度校正自维护时钟：小步只向前校正，明显回跳(>1s，拖动/重播)才向后；
-                        // 再叠加“播放态切换时强制对齐一次”。避免量化抖动来回校正导致歌词“滚上滚下”。
+                        // 汽水非会员试听：底部播放条只显示 30s 片段时长，而整首歌时长来自 track.duration。
+                        // 判定为片段播放时，把片段起点记到 trial_start，让歌词和进度条都按整首歌的绝对时间显示。
+                        let full = if self.soda_full_dur > 1.0 {
+                            self.soda_full_dur
+                        } else if self.music.duration > 1.0 {
+                            self.music.duration
+                        } else {
+                            0.0
+                        };
+                        let is_trial = self.soda_trial_hint
+                            && full > 30.0
+                            && self.soda_clip_dur >= 10.0
+                            && self.soda_clip_dur < full * 0.95;
+                        self.soda_trial_active = is_trial;
+                        if is_trial {
+                            self.trial_start = self.soda_clip_start.max(0.0) as f32;
+                        } else {
+                            self.trial_start = 0.0;
+                        }
+                        // 汽水播放条的 DOM 进度约 1 秒才跳一次；fetch_progress 每 400ms 轮询，
+                        // 同一个旧值会被读到 2~3 次。若把“旧值”当成落后去回拉，自维护时钟就会
+                        // 每 1~2 秒被拉回去一次，歌词已渲染的字会闪一下又重新渲染。
+                        // 因此只在进度值“确实变了”时校正，重复值一律忽略（时钟本来就在实时推进）。
+                        let changed = (p - self.soda_last_p).abs() > 0.002;
+                        self.soda_last_p = p;
                         let cur = self.current_pos();
-                        let diff = p - cur;
+                        let diff = p_now - cur;
                         if self.soda_playing == Some(false) {
                             // 已暂停：进度必须精确停在播放器真实位置，绝不做软校正（否则会
                             // 从 2:31 一点点滑回 2:30，看起来就是“2:30/2:31 来回跳”）。
@@ -6737,13 +6841,14 @@ impl eframe::App for IslandApp {
                             // 已请求暂停、播放器还没确认：保持当前位置不动，等确认后再精确对齐
                         } else if force_sync || diff.abs() > 2.0 {
                             // 播放态切换 / 拖动跳变：精确对齐一次
-                            self.spos = p;
+                            self.spos = p_now;
                             self.spos_at = Instant::now();
                             self.spos_valid = true;
-                        } else if diff > 0.08 || diff < -0.45 {
-                            // 亚秒级小误差：软校正（每次吸收 ~35%）；只在明显落后或明显超前时修正，
-                            // -0.45..0.08 的死区避免正常量化抖动被反复纠正成整秒锯齿。
-                            self.spos = (cur + diff * 0.35).clamp(0.0, self.soda_dur.max(1.0));
+                        } else if changed {
+                            // 只在进度值真的跳变时对齐一次（每约 1 秒），且用 p+age 还原到“现在”。
+                            // 重复旧值完全忽略，避免把时钟每 400ms 往回拉、造成歌词字闪一下。
+                            // 每秒一次的微小修正（通常几十毫秒）不可见，却能消除长期漂移。
+                            self.spos = p_now.max(cur);
                             self.spos_at = Instant::now();
                             self.spos_valid = true;
                         }
@@ -6757,9 +6862,8 @@ impl eframe::App for IslandApp {
         }        // VIP 试听片段起点探测：播放时�?<60s（试听片段）时，扫描网易云内存日志里
         // 本轮播放开始后�?freeTrialInfo.start，把“片段内相对时间”映射到整首歌绝对时间�?
         if self.app_is_soda() {
-            // 汽水：不使用网易云试听探测，试听起点只由汽水自身逻辑处理
+            // 汽水：不走网易云内存探测；试听起点由上面的 soda 进度分支维护，这里绝不能清零。
             self.trial_probe = None;
-            self.trial_start = 0.0;
         } else if let Some((at, n)) = self.trial_probe {
             if self.music.title.is_empty() || self.netease_dur >= 60.0 {
                 self.trial_probe = None;
@@ -6789,6 +6893,12 @@ impl eframe::App for IslandApp {
             // since 留空表示接受内存里最新的一条记录。
             let first_song = self.trial_since.is_empty();
             self.trial_start = 0.0;
+            self.soda_full_dur = 0.0;
+            self.soda_clip_start = 0.0;
+            self.soda_clip_dur = 0.0;
+            self.soda_trial_active = false;
+            self.soda_trial_hint = false;
+            self.soda_last_p = -1.0;
             self.trial_since = if first_song {
                 String::new()
             } else {
