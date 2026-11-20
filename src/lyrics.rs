@@ -24,9 +24,77 @@ pub struct LrcLine {
 /// 用它作为展示歌词（收起态、展开态都显示这一句，而不是“暂无歌词”）。
 pub const INSTRUMENTAL_TEXT: &str = "纯音乐，请欣赏";
 
-/// 判断一段歌词原文是否为「纯音乐 / 请欣赏」占位（网易云、QQ、汽水都常用这两个词标记整首纯音乐）。
+/// 严格判定「单行文本」是否为纯音乐占位标记。
+///
+/// 只有「整句本身就是占位短语」才判为纯音乐：包含“纯音乐”且整句很短（≤24 字），
+/// 或整句核心字面就是“请欣赏 / 谢谢欣赏”等固定短语。这样正常歌词里偶然出现
+/// “请欣赏”几个字（如“我请你欣赏这满山花开”）不会被误判成纯音乐。
+pub fn is_instrumental_marker(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // 归一化：去掉空白与常见中英文标点，得到“核心字面”再做严格比较。
+    let core: String = t
+        .chars()
+        .filter(|c| {
+            !c.is_whitespace()
+                && !c.is_ascii_punctuation()
+                && !"、。，！？；：…—－~～·“”‘’「」『』（）《》〈〉【】".contains(*c)
+        })
+        .collect();
+    if core.is_empty() {
+        return false;
+    }
+    if core.contains("纯音乐") && core.chars().count() <= 24 {
+        return true;
+    }
+    matches!(
+        core.as_str(),
+        "请欣赏" | "请您欣赏" | "谢谢欣赏" | "感谢欣赏" | "敬请欣赏" | "请欣赏谢谢"
+    )
+}
+
+/// 去掉 LRC 的 [时间] 标签与 YRC 的 (起,时,0) 逐字时间括号，只保留歌词正文。
+fn strip_time_tags(line: &str) -> String {
+    let mut out = String::new();
+    let mut sq = 0i32;
+    let mut par = 0i32;
+    for ch in line.chars() {
+        match ch {
+            '[' => sq += 1,
+            ']' => sq = (sq - 1).max(0),
+            '(' => par += 1,
+            ')' => par = (par - 1).max(0),
+            _ => {
+                if sq == 0 && par == 0 {
+                    out.push(ch);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 判断一段歌词原文是否为「纯音乐 / 请欣赏」占位。
+///
+/// 逐行严格判定（先剥掉时间标签）：所有非空行都必须本身是占位短语才算纯音乐；
+/// 正常歌词（含多行）绝不会因为某一句里出现“请欣赏”而被误判。同时兼容带时间戳
+/// 与不带时间戳两种返回格式（`[00:00.00]纯音乐，请欣赏` / `纯音乐，请欣赏`）。
 pub fn looks_instrumental(raw: &str) -> bool {
-    raw.contains("纯音乐") || raw.contains("请欣赏")
+    let mut any = false;
+    for line in raw.lines() {
+        let text = strip_time_tags(line);
+        let t = text.trim();
+        if t.is_empty() {
+            continue;
+        }
+        any = true;
+        if !is_instrumental_marker(t) {
+            return false;
+        }
+    }
+    any
 }
 
 /// 构造「纯音乐」占位歌词（单行、时间 0，便于统一走现有的歌词展示逻辑）。
@@ -38,9 +106,29 @@ pub fn instrumental_line() -> Vec<LrcLine> {
     }]
 }
 
-/// 判断一组歌词是否为「纯音乐」占位（全部行都是“纯音乐/请欣赏”标记）。
+/// 判断一组歌词是否为「纯音乐」占位（全部行都是纯音乐标记）。
 pub fn is_instrumental(lines: &[LrcLine]) -> bool {
-    !lines.is_empty() && lines.iter().all(|l| looks_instrumental(&l.text))
+    !lines.is_empty() && lines.iter().all(|l| is_instrumental_marker(&l.text))
+}
+
+/// 汽水专用「轻量」歌词探测：只通过 CDP 读当前播放页的 LyricsView / .no-lyric 文本，
+/// 不做任何内存扫描、不读写磁盘缓存。用于「切歌后歌词页比歌词晚到」时的高频补取：
+/// 汽水歌词页可能几秒后才渲染出来，甚至要等用户点开播放页才出现「纯音乐，请欣赏」，
+/// 用这个廉价探测每隔几秒补一次，既不烧 CPU，又能及时把纯音乐/迟到歌词补上。
+///
+/// 返回：`Some(instrumental_line())` 表示当前曲目确为纯音乐；`Some(真实歌词)` 表示
+/// 歌词迟到但已可读；`None` 表示此刻还读不到（调用方稍后再试）。
+pub fn soda_probe_cdp(title: &str, artist: &str) -> Option<Vec<LrcLine>> {
+    let sl = crate::cdp_lyric::fetch_current_no_nav(title, artist)?;
+    if looks_instrumental(&sl.content) {
+        return Some(instrumental_line());
+    }
+    let l = crate::cdp_lyric::parse_content(&sl.content);
+    if l.len() >= 2 {
+        Some(l)
+    } else {
+        None
+    }
 }
 
 fn dlog(s: &str) {
@@ -1160,8 +1248,20 @@ mod instrumental_tests {
         assert!(looks_instrumental("纯音乐，请欣赏"));
         assert!(looks_instrumental("纯音乐"));
         assert!(looks_instrumental("此歌曲为没有填词的纯音乐，请您欣赏"));
+        assert!(looks_instrumental("[00:00.00]纯音乐，请欣赏"));
+        assert!(looks_instrumental("[00:00.00]纯音乐，请欣赏\n"));
+        assert!(looks_instrumental("[00:00.00]纯音乐，请欣赏\n[00:03.00]谢谢欣赏"));
+        assert!(looks_instrumental("[00:00.00](0,100,0)纯(100,80,0)音乐，请欣赏"));
+        assert!(looks_instrumental("请欣赏"));
         assert!(!looks_instrumental("作词 : 林夕"));
         assert!(!looks_instrumental(""));
+        // 正常歌词里出现“请欣赏”不应误判为纯音乐
+        assert!(!looks_instrumental("[00:12.00]我请你欣赏这满山花开\n[00:15.00]第二句歌词"));
+        // 有真实歌词行 + 结尾一句“纯音乐”也不能把整首判为纯音乐
+        assert!(!looks_instrumental("[00:00.00]第一句\n[00:03.00]纯音乐，请欣赏"));
+        // 汽水把「有曲目但缺歌词」标成“暂无歌词，请欣赏”，这不是纯音乐，不能误判
+        assert!(!looks_instrumental("暂无歌词，请欣赏"));
+        assert!(!is_instrumental_marker("暂无歌词，请欣赏"));
     }
 
     #[test]

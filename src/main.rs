@@ -636,6 +636,39 @@ fn draw_tex_rotated(painter: &egui::Painter, id: egui::TextureId, rect: egui::Re
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// 把一张正方形贴图的内切圆按半径 radius 画成圆盘，并绕圆心旋转 ang 弧度（用于唱片封面旋转）。
+/// 与真实封面共用的同一套圆扇 mesh：贴图点 base 处会出现在屏幕角度 base+ang，从而随 ang 旋转。
+fn draw_rotating_circle_tex(
+    painter: &egui::Painter,
+    id: egui::TextureId,
+    dc: egui::Pos2,
+    radius: f32,
+    ang: f32,
+    a: u8,
+) {
+    let col = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
+    let mut mesh = egui::Mesh::with_texture(id);
+    mesh.vertices.push(egui::epaint::Vertex { pos: dc, uv: egui::pos2(0.5, 0.5), color: col });
+    let n = 160usize;
+    for i in 0..n {
+        let base = (i as f32) / (n as f32) * std::f32::consts::TAU;
+        let th = base + ang;
+        let (s, c) = (th.sin(), th.cos());
+        let (sb, cb) = (base.sin(), base.cos());
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: egui::pos2(dc.x + radius * c, dc.y + radius * s),
+            uv: egui::pos2(0.5 + 0.5 * cb, 0.5 + 0.5 * sb),
+            color: col,
+        });
+    }
+    for i in 0..n {
+        let a1 = 1 + i as u32;
+        let a2 = 1 + ((i + 1) % n) as u32;
+        mesh.indices.extend_from_slice(&[0, a1, a2]);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 /// 按音源 app_id（可能是 exe 名或 WinRT AUMID）-> 友好名称
 fn src_label(app_id: &str) -> String {
     let s = app_id.to_ascii_lowercase();
@@ -843,7 +876,7 @@ struct IslandApp {
     /// SMTC 轮询器（主线程非阻塞状态机，见 smtc.rs）
     tracker: smtc::Tracker,
     /// 歌词后台工作线程
-    lyr_tx: std::sync::mpsc::Sender<(String, String, String, f64, bool)>,
+    lyr_tx: std::sync::mpsc::Sender<(String, String, String, f64, bool, bool)>,
     lyr_rx: std::sync::mpsc::Receiver<(String, Option<Vec<lyrics::LrcLine>>, Option<Vec<u8>>)>,
     lyr_key: String,
     lyr_dur: f64, // 当初请求歌词时采用的“期望时长”，用于发现同名不同版本(时长不符)后重�?
@@ -1103,12 +1136,19 @@ struct IslandApp {
 impl IslandApp {
     fn new(tray: Option<Tray>, open_panel: bool) -> Self {
         let cfg = Config::load();
-        let (lyr_tx, lyr_req_rx) = std::sync::mpsc::channel::<(String, String, String, f64, bool)>();
+        let (lyr_tx, lyr_req_rx) =
+            std::sync::mpsc::channel::<(String, String, String, f64, bool, bool)>();
         let (lyr_res_tx, lyr_rx) =
             std::sync::mpsc::channel::<(String, Option<Vec<lyrics::LrcLine>>, Option<Vec<u8>>)>();
         std::thread::spawn(move || {
-            while let Ok((key, title, artist, dur, soda)) = lyr_req_rx.recv() {
-                let (r, cov) = lyrics::fetch_full(&title, &artist, dur, soda);
+            while let Ok((key, title, artist, dur, soda, light)) = lyr_req_rx.recv() {
+                // light=true：仅走 CDP 廉价探测（不扫内存、不碰磁盘），用于歌词页迟到时补取；
+                // light=false：完整链路（CDP + 内存兜底 + 缓存 + 封面）。
+                let (r, cov) = if light {
+                    (lyrics::soda_probe_cdp(&title, &artist), None)
+                } else {
+                    lyrics::fetch_full(&title, &artist, dur, soda)
+                };
                 // 迷你?
                 {
                     use std::io::Write;
@@ -2723,7 +2763,7 @@ impl IslandApp {
                 let cur = if instrumental { None } else { self.cur_lyric_idx() };
                 if instrumental {
                     // 纯音乐：收起态直接显示“纯音乐，请欣赏”，与展开态一致�?
-                    self.draw_marquee(&painter, text_rect, lyrics::INSTRUMENTAL_TEXT, egui::FontId::proportional(14.0), fg, t, false, self.cfg.edge_fade);
+                    self.draw_marquee(&painter, text_rect, lyrics::INSTRUMENTAL_TEXT, egui::FontId::proportional(14.0), green, t, false, self.cfg.edge_fade);
                 } else if let Some(i) = cur {
                     let line = self.lyr_lines[i].text.clone();
                     let prog = self.line_progress(i);
@@ -3312,7 +3352,7 @@ impl IslandApp {
         let instrumental = lyrics::is_instrumental(&self.lyr_lines);
         let cur = if instrumental { None } else { self.cur_lyric_idx() };
         if instrumental {
-            self.draw_marquee(painter, text_rect, lyrics::INSTRUMENTAL_TEXT, egui::FontId::proportional(LYRIC_COLLAPSED_PT), fg, t, false, self.cfg.edge_fade);
+            self.draw_marquee(painter, text_rect, lyrics::INSTRUMENTAL_TEXT, egui::FontId::proportional(LYRIC_COLLAPSED_PT), green, t, false, self.cfg.edge_fade);
         } else if let Some(i) = cur {
             let line = self.lyr_lines[i].text.clone();
             let prog = self.line_progress(i);
@@ -3699,6 +3739,23 @@ impl IslandApp {
         }
     }
 
+    /// 展开态「纯音乐，请欣赏」艺术字：逐字横向渐变（薄荷绿→近白）+ 柔和外发光，居中显示。
+    /// 仅整首无歌词的纯音乐使用；收起态仍用普通跑马灯（用户要求“即可”）。
+    fn draw_instrumental_art(&self, painter: &egui::Painter, rect: egui::Rect, cy: f32, a: u8) {
+        if a == 0 {
+            return;
+        }
+        // 朴素纯灰：与汽水一致——单色、无渐变、无发光，居中一行。
+        let gray = egui::Color32::from_rgba_unmultiplied(150, 150, 150, a);
+        painter.text(
+            egui::pos2(rect.center().x, cy),
+            egui::Align2::CENTER_CENTER,
+            lyrics::INSTRUMENTAL_TEXT,
+            egui::FontId::proportional(15.0),
+            gray,
+        );
+    }
+
     /// 画一行歌词（支持竖直偏移 dy 与自定义裁剪 clip），供收起态“上滚”动画使用：
     /// base 打底，prog>0 时从左到右用 fill 渐绿；过长则横向滚动（只滚一遍，滚到句尾停住）�?
     #[allow(clippy::too_many_arguments)]
@@ -3812,22 +3869,7 @@ impl IslandApp {
         }
         if let Some(ct) = self.cover_tex.as_ref() {
             // 3) 中心圆形封面（随盘旋转）
-            let mut mesh = egui::Mesh::with_texture(ct.id());
-            mesh.vertices.push(egui::epaint::Vertex { pos: dc, uv: egui::pos2(0.5, 0.5), color: egui::Color32::from_rgba_unmultiplied(255, 255, 255, a) });
-            let n = 160usize;
-            for i in 0..n {
-                let base = (i as f32) / (n as f32) * std::f32::consts::TAU;
-                let th = base + self.disc_angle;
-                let (s, c) = (th.sin(), th.cos());
-                let (sb, cb) = (base.sin(), base.cos());
-                mesh.vertices.push(egui::epaint::Vertex { pos: egui::pos2(dc.x + cover_r * c, dc.y + cover_r * s), uv: egui::pos2(0.5 + 0.5 * cb, 0.5 + 0.5 * sb), color: egui::Color32::from_rgba_unmultiplied(255, 255, 255, a) });
-            }
-            for i in 0..n {
-                let a1 = 1 + i as u32;
-                let a2 = 1 + ((i + 1) % n) as u32;
-                mesh.indices.extend_from_slice(&[0, a1, a2]);
-            }
-            painter.add(egui::Shape::mesh(mesh));
+            draw_rotating_circle_tex(painter, ct.id(), dc, cover_r, self.disc_angle, a);
         } else {
             // 无真实封面：中心用按歌名哈希的渐变圆 + 音符兜底
             let mut h: u64 = 1469598103934665603;
@@ -3873,15 +3915,20 @@ impl IslandApp {
                 self.fallback_cover_tex = Some((h, tex));
             }
             if let Some((_, tex)) = self.fallback_cover_tex.as_ref() {
-                let crect = egui::Rect::from_center_size(dc, egui::vec2(cover_r * 2.0, cover_r * 2.0));
-                painter.image(
-                    tex.id(),
-                    crect,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, a),
-                );
+                // 兜底封面也像真实封面一样，用圆扇 mesh 随 disc_angle 旋转
+                draw_rotating_circle_tex(painter, tex.id(), dc, cover_r, self.disc_angle, a);
             }
-            painter.text(dc, egui::Align2::CENTER_CENTER, "♪", egui::FontId::proportional(cover_r * 0.9), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 210));
+            // 中心音符：用 TextShape 绕盘心旋转，保证与封面同向同步转动（不再钉死在中心）
+            let note_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 210);
+            let ng = painter.layout_no_wrap("♪".to_owned(), egui::FontId::proportional(cover_r * 0.9), note_color);
+            // TextShape 的旋转支点是 pos（左上角）：令 pos = dc - R(angle)*字形中心偏移，
+            // 旋转后字形视觉中心正好落在盘心，实现绕盘心旋转。
+            let c0 = ng.mesh_bounds.center().to_vec2();
+            let ang = self.disc_angle;
+            let (ns, nc) = (ang.sin(), ang.cos());
+            let rot_c0 = egui::vec2(nc * c0.x - ns * c0.y, ns * c0.x + nc * c0.y);
+            let note_pos = egui::pos2(dc.x - rot_c0.x, dc.y - rot_c0.y);
+            painter.add(egui::epaint::TextShape::new(note_pos, ng, note_color).with_angle(ang));
         }
         // 唱臂：底座静止 + 臂绕固定支点旋转（支点在贴图内 (146,20)，因整体 translate(-12,0)）
         if let Some(base) = self.tt_base.as_ref() {
@@ -4233,14 +4280,11 @@ impl IslandApp {
                     self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), fc, fc, 0.0, ilt, false, false);
                 }
             }
+        } else if instrumental {
+            // 纯音乐：歌词区居中显示「纯音乐，请欣赏」（朴素纯灰，与汽水一致）。
+            self.draw_instrumental_art(painter, lyric_rect, center_y, a);
         } else {
-            let hint = if instrumental {
-                lyrics::INSTRUMENTAL_TEXT
-            } else if self.lyr_done {
-                "暂无歌词"
-            } else {
-                "歌词加载中…"
-            };
+            let hint = if self.lyr_done { "暂无歌词" } else { "歌词加载中…" };
             painter.text(egui::pos2((lx0 + cx1) * 0.5, center_y), egui::Align2::CENTER_CENTER, hint, egui::FontId::proportional(13.0), egui::Color32::from_rgba_unmultiplied(120, 196, 160, a));
         }
     }
@@ -6999,7 +7043,7 @@ impl eframe::App for IslandApp {
                     a.contains("汽水") || a.contains("soda") || a.contains("qishui")
                 };
                 self.lyr_inflight = true;
-                let _ = self.lyr_tx.send((key.clone(), self.music.title.clone(), self.music.artist.clone(), dur_now, is_soda));
+                let _ = self.lyr_tx.send((key.clone(), self.music.title.clone(), self.music.artist.clone(), dur_now, is_soda, false));
             }
         } else {
             // 同名不同版本纠偏：拿到播放器真实总时长后，若与当初选歌词用的时长差 >4s�?
@@ -7021,6 +7065,7 @@ impl eframe::App for IslandApp {
                     self.music.artist.clone(),
                     self.netease_dur,
                     is_soda,
+                    false,
                 ));
             }
             // 有效播放状态：有可信 position 时用真实状态；否则只要有歌名就假设在播放
@@ -7056,8 +7101,8 @@ impl eframe::App for IslandApp {
         if !self.music.title.is_empty()
             && self.lyr_lines.is_empty()
             && !self.lyr_inflight
-            && self.lyr_retry_n < 4
-            && self.lyr_retry_at.elapsed() > Duration::from_millis(2200)
+            && self.lyr_retry_n < 60
+            && self.lyr_retry_at.elapsed() > Duration::from_millis(2500)
         {
             let a = self.music.app_id.to_ascii_lowercase();
             if a.contains("汽水") || a.contains("soda") || a.contains("qishui") {
@@ -7066,11 +7111,13 @@ impl eframe::App for IslandApp {
                 self.lyr_done = false;
                 let dur_now = self.lyric_duration();
                 self.lyr_inflight = true;
+                // 重试用轻量 CDP 探测（不扫内存），歌词页/“纯音乐，请欣赏”迟到也能补上。
                 let _ = self.lyr_tx.send((
                     self.lyr_key.clone(),
                     self.music.title.clone(),
                     self.music.artist.clone(),
                     dur_now,
+                    true,
                     true,
                 ));
             }

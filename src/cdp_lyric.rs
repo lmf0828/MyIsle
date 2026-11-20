@@ -218,26 +218,40 @@ const EXPR: &str = r#"(()=>{
  const app=el&&el.__vue_app__;
  if(!app) return {ok:false,why:'noapp',vis:document.visibilityState,focus:document.hasFocus()};
  const root=app._container&&app._container._vnode;
- const seen=new Set(); let t=null;
+ const seen=new Set(); const list=[];
  (function walk(v,d){
-   if(!v||d>600||seen.has(v)||t)return; seen.add(v);
+   if(!v||d>600||seen.has(v))return; seen.add(v);
    const c=v.component;
    if(c){ const n=(c.type&&(c.type.__name||c.type.name))||'';
-     if(n==='LyricsView'&&c.props&&c.props.lyric&&c.props.lyric.content&&c.subTree&&c.subTree.el&&c.subTree.el.isConnected){t=c;}
+     if(n==='LyricsView'&&c.props&&c.subTree&&c.subTree.el&&c.subTree.el.isConnected){
+       const lyr=c.props.lyric||{}, tr=c.props.track||{};
+       const arts=(tr.artists||[]).map(a=>a&&a.name).filter(Boolean).join(', ');
+       const uc=(tr.album&&tr.album.url_cover)||{};
+       let cover='';
+       if(uc&&uc.uri){ const base=(uc.urls&&uc.urls[0])||'https://p3-luna.douyinpic.com/img/'; const tpl=uc.template_prefix||'tplv-b829550vbb'; cover=base+uc.uri+'~'+tpl+'-crop-center:400:400.jpg'; }
+       let noLyric='';
+       try{ const ne=c.subTree.el.querySelector('.no-lyric .text'); if(ne) noLyric=(ne.textContent||'').trim(); }catch(e){}
+       list.push({name:tr.name||'',artist:arts,duration:(tr.duration||0)/1000,content:lyr.content||'',cn:(lyr.translations&&lyr.translations.cn)||'',cover:cover,noLyric:noLyric});
+     }
      walk(c.subTree,d+1);
    }
    const ch=v.children;
    if(Array.isArray(ch))ch.forEach(x=>walk(x,d+1)); else if(ch&&typeof ch==='object')walk(ch,d+1);
    if(v.suspense)walk(v.suspense.activeBranch,d+1);
  })(root,0);
- if(!t) return {ok:false,why:'nolyricview',vis:document.visibilityState,focus:document.hasFocus()};
- const lyr=t.props.lyric, tr=t.props.track||{};
- const arts=(tr.artists||[]).map(a=>a&&a.name).filter(Boolean).join(', ');
- const uc=(tr.album&&tr.album.url_cover)||{};
- let cover='';
- if(uc&&uc.uri){ const base=(uc.urls&&uc.urls[0])||'https://p3-luna.douyinpic.com/img/'; const tpl=uc.template_prefix||'tplv-b829550vbb'; cover=base+uc.uri+'~'+tpl+'-crop-center:400:400.jpg'; }
- return {ok:true,name:tr.name||'',artist:arts,duration:(tr.duration||0)/1000,
-   content:lyr.content||'',cn:(lyr.translations&&lyr.translations.cn)||'',cover:cover,focus:document.hasFocus()};
+ // DOM 兜底：汽水把整个播放页栈（当前曲目 + 后续几首）都挂在 DOM 里，每个 .player-box
+ // 都带歌名与「纯音乐，请欣赏 / 暂无歌词，请欣赏」占位。用于 LyricsView 未挂载或内容为空时按歌名核对。
+ const pages=[];
+ try{
+   document.querySelectorAll('.player-box').forEach(function(pb){
+     const te=pb.querySelector('.info .track .audio-info .title');
+     let nm=te?((te.innerText||'').split('\n')[0]||'').trim():'';
+     const ne=pb.querySelector('.lyrics-container .no-lyric .text');
+     const nl=ne?(ne.textContent||'').trim():'';
+     if(nm||nl) pages.push({name:nm,noLyric:nl});
+   });
+ }catch(e){}
+ return {ok:true,vis:document.visibilityState,focus:document.hasFocus(),list:list,pages:pages};
 })()"#;
 
 fn norm(s: &str) -> String {
@@ -416,6 +430,10 @@ pub fn fetch_play_state() -> Option<(bool, f64, f64)> {
 
 fn fetch_current_inner(title: &str, artist: &str, allow_nav: bool) -> Option<SodaLyric> {
     let want_t = norm(title);
+    let name_match = |name: &str| {
+        let got_t = norm(name);
+        want_t.is_empty() || got_t == want_t || got_t.contains(&want_t) || want_t.contains(&got_t)
+    };
     let mut result = None;
     for attempt in 0..4 {
         let mut retry = false;
@@ -426,25 +444,65 @@ fn fetch_current_inner(title: &str, artist: &str, allow_nav: bool) -> Option<Sod
             if let Some(o) = val {
                 hidden = o.get("vis").and_then(|x| x.as_str()) == Some("hidden");
                 if o.get("ok").and_then(|x| x.as_bool()) == Some(true) {
-                    let name = o.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    let content = o.get("content").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    let got_t = norm(&name);
-                    let name_ok = want_t.is_empty()
-                        || got_t == want_t
-                        || got_t.contains(&want_t)
-                        || want_t.contains(&got_t);
-                    if name_ok && !content.trim().is_empty() {
-                        result = Some(SodaLyric {
-                            name,
-                            artist: o.get("artist").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                            duration: o.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
-                            content,
-                            cn: o.get("cn").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                            cover: o.get("cover").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                        });
-                        break;
+                    // 1) Vue LyricsView：优先取「歌名匹配 + 有真实歌词内容」的。
+                    if let Some(list) = o.get("list").and_then(|x| x.as_array()) {
+                        for item in list {
+                            let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                            let content = item.get("content").and_then(|x| x.as_str()).unwrap_or("");
+                            if name_match(name) && !content.trim().is_empty() {
+                                result = Some(SodaLyric {
+                                    name: name.to_string(),
+                                    artist: item.get("artist").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                                    duration: item.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                    content: content.to_string(),
+                                    cn: item.get("cn").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                                    cover: item.get("cover").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                                });
+                                break;
+                            }
+                        }
+                        // 2) Vue LyricsView：纯音乐占位（content 为空，但 .no-lyric 文本是「纯音乐」标记）。
+                        if result.is_none() {
+                            for item in list {
+                                let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                                let no_lyric = item.get("noLyric").and_then(|x| x.as_str()).unwrap_or("");
+                                if name_match(name) && crate::lyrics::is_instrumental_marker(no_lyric) {
+                                    result = Some(SodaLyric {
+                                        name: name.to_string(),
+                                        artist: item.get("artist").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                                        duration: item.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                        content: no_lyric.to_string(),
+                                        cn: item.get("cn").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                                        cover: item.get("cover").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                                    });
+                                    break;
+                                }
+                            }
+                        }
                     }
-                    retry = true;
+                    // 3) DOM .player-box 兜底：LyricsView 未挂载时，按歌名核对 .no-lyric 文本。
+                    if result.is_none() {
+                        if let Some(pages) = o.get("pages").and_then(|x| x.as_array()) {
+                            for p in pages {
+                                let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                                let no_lyric = p.get("noLyric").and_then(|x| x.as_str()).unwrap_or("");
+                                if name_match(name) && crate::lyrics::is_instrumental_marker(no_lyric) {
+                                    result = Some(SodaLyric {
+                                        name: name.to_string(),
+                                        artist: String::new(),
+                                        duration: 0.0,
+                                        content: no_lyric.to_string(),
+                                        cn: String::new(),
+                                        cover: String::new(),
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if result.is_none() {
+                        retry = true;
+                    }
                 } else {
                     dlog(&format!(
                         "cdp not ready: {}",
