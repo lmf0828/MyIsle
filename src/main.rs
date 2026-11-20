@@ -64,7 +64,7 @@ const CB_EDGE: f32 = 5.0;
 const CB_OUTER_EXTRA: f32 = 5.0;
 const CB_GAP: f32 = 10.0;
 /// 收起态歌词字号（逻辑像素）。收起态固定此值、不读配置（配置 lyric_font 仅作用于展开态）。
-const LYRIC_COLLAPSED_PT: f32 = 12.0;
+const LYRIC_COLLAPSED_PT: f32 = 13.0;
 /// 收起条最大宽度 = 目前展开后的宽度（用户指定）
 const CW_MAX: f32 = W_EXPANDED;
 const H_COLLAPSED: f32 = 30.0;
@@ -977,6 +977,7 @@ struct IslandApp {
     wave_idle: [f32; 128],
     /// 水波频谱「播放」形态的逐柱平滑显示高度（同上索引），对真实频段再做一次柔和。
     wave_play: [f32; 128],
+    wave_disp: [f32; 128],
     /// 播放/未播放两种形态的交叉淡入比例：0=未播放，1=播放，按时间平滑过渡，切换时不突然卡过去。
     wave_mix: f32,
     /// 上一帧“提交结束”的时刻，用于把渲染循环限速到 60fps（该虚拟显示器 200Hz，vsync 会顶到 200fps）
@@ -1069,6 +1070,9 @@ struct IslandApp {
     /// 天气页滚动偏移（当前�?/ 目标值，平滑逼近�?
     w_scroll: f32,
     w_scroll_target: f32,
+    /// 收起态天气温度文本的实测宽度：天气槽宽 = 图标 20 + 间距 6 + 温度文字宽度，
+    /// 模块左右各 5px 由外层统一间距提供，避免槽内留白把相邻模块推远。
+    w_temp_w: f32,
     /// 天气页滚动条可见度（0..1）：滚动时淡入，停止约 1.2 秒后自动淡出
     w_scroll_vis: f32,
     /// 天气页最近一次滚动活动时间（用于滚动条自动隐藏判定）
@@ -1237,6 +1241,7 @@ impl IslandApp {
             spec_last_t: 0.0,
             wave_idle: [0.52; 128],
             wave_play: [0.0; 128],
+        wave_disp: [0.52; 128],
             wave_mix: 0.0,
             frame_last: Instant::now() - Duration::from_millis(20),
             prev_req_ms: 16.0,
@@ -1291,6 +1296,7 @@ impl IslandApp {
             w_fetch_label,
             w_scroll: 0.0,
             w_scroll_target: 0.0,
+            w_temp_w: 18.0,
             w_scroll_vis: 0.0,
             w_scroll_act: std::time::Instant::now() - std::time::Duration::from_secs(10),
             w_city_search: false,
@@ -1740,18 +1746,13 @@ impl IslandApp {
         (max_h * aspect).min(CW_FACE).max(8.0)
     }
 
-    /// 收起态「天气」模块的紧凑槽宽：图标 + 温度 + 天气类型文字。
+    /// 收起态「天气」模块的紧凑槽宽：图标 20 + 间距 6 + 温度文字实测宽度。
+    /// 槽宽只包住内容，模块左右各 5px 由统一的组件间距/首尾外边距提供。
     fn weather_slot_w(&self) -> f32 {
         if self.w_data.is_none() {
             return CW_WEATHER;
         }
-        let mut w = 54.0;
-        if let Some(wd) = self.w_data.as_ref() {
-            if !wd.today_type.is_empty() {
-                w += wd.today_type.chars().count() as f32 * 11.0;
-            }
-        }
-        w
+        20.0 + 6.0 + self.w_temp_w.max(10.0)
     }
 
     /// 某表情内容包围盒对应的“可视宽高比”。
@@ -3230,7 +3231,13 @@ impl IslandApp {
             };
             // 未播放↔播放交叉淡入：切换过程中柱形连续形变，而不是瞬间跳到另一套高度。
             let vv = idle_v * (1.0 - wave_mix) + play_v * wave_mix;
-            let v = vv.clamp(0.05, 0.99);
+            // 再对每根柱子的显示高度做一次攻击/释放平滑：保证播放↔暂停切换（尤其播放→暂停）也连续，不会直接跳短。
+            let prev_disp = self.wave_disp[si];
+            let tau_disp = if vv > prev_disp { 0.05_f32 } else { 0.11_f32 };
+            let ease_disp = 1.0 - (-dt / tau_disp).exp();
+            let disp = prev_disp + (vv - prev_disp) * ease_disp;
+            self.wave_disp[si] = disp;
+            let v = disp.clamp(0.05, 0.99);
             let hgt = (v * max_h).max(1.5) + 5.0;
             let bx = x0 + i as f32 * (bw + gap);
 
@@ -3373,21 +3380,24 @@ impl IslandApp {
         }
     }
 
-    /// 收起态天气槽：天气图标 + 温度（+ 类型）。
-    fn draw_collapsed_weather(&self, painter: &egui::Painter, x: f32, _x1: f32, cy: f32, a: u8, t: f64, st: platform::SYSTEMTIME) {
-        if let Some(w) = self.w_data.as_ref() {
-            let f = self.cfg.weather_unit == 1;
-            let sky = weather::sky_of(&w.today_type, st.wHour >= 18 || st.wHour < 6);
-            let tcol = egui::Color32::from_rgba_unmultiplied(238, 240, 246, a);
-            let dim = egui::Color32::from_rgba_unmultiplied(150, 158, 175, a);
-            let bgm = egui::Color32::from_rgb(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2]);
-            draw_weather_icon(painter, sky, egui::pos2(x + 10.0, cy), 20.0, a, t, bgm);
-            let temp = weather::conv_temp(w.temp, f);
-            painter.text(egui::pos2(x + 26.0, cy - 0.5), egui::Align2::LEFT_CENTER, format!("{:.0}°", temp), bold_font(13.5), tcol);
-            if !w.today_type.is_empty() {
-                painter.text(egui::pos2(x + 54.0, cy), egui::Align2::LEFT_CENTER, &w.today_type, egui::FontId::proportional(11.0), dim);
-            }
-        }
+    /// 收起态天气槽：天气图标 + 温度（不显示天气类型文字，保持胶囊紧凑）。
+    fn draw_collapsed_weather(&mut self, painter: &egui::Painter, x: f32, _x1: f32, cy: f32, a: u8, t: f64, st: platform::SYSTEMTIME) {
+        let (sky, temp) = match self.w_data.as_ref() {
+            Some(w) => (
+                weather::sky_of(&w.today_type, st.wHour >= 18 || st.wHour < 6),
+                weather::conv_temp(w.temp, self.cfg.weather_unit == 1),
+            ),
+            None => return,
+        };
+        let tcol = egui::Color32::from_rgba_unmultiplied(238, 240, 246, a);
+        let bgm = egui::Color32::from_rgb(self.cfg.bg[0], self.cfg.bg[1], self.cfg.bg[2]);
+        let text = format!("{:.0}°", temp);
+        let fid = bold_font(13.5);
+        // 实测温度文字宽度，供下一帧的天气槽宽精确贴合内容（避免槽内右侧留白）。
+        let tw = painter.layout_no_wrap(text.clone(), fid.clone(), tcol).size().x;
+        self.w_temp_w = tw;
+        draw_weather_icon(painter, sky, egui::pos2(x + 10.0, cy), 20.0, a, t, bgm);
+        painter.text(egui::pos2(x + 26.0, cy - 0.5), egui::Align2::LEFT_CENTER, text, fid, tcol);
     }
 
     /// 展开态但当前没有音乐会话时，显示友好的空状态，而不是一块空白深色面板。
