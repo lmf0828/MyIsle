@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$Version = "",
     [string]$Repo = ""
 )
@@ -16,7 +16,7 @@ if (-not $Repo) {
         if ($u -match 'github\.com[:/](?<r>[^/]+/[^/.]+)') { $Repo = $Matches['r'] }
     } catch {}
 }
-if (-not $Repo) { $Repo = 'lmf0828/WinIsle' }
+if (-not $Repo) { $Repo = 'long-mf/WinIsle' }
 
 if ($Version) { & "$PSScriptRoot\set_version.ps1" -Version $Version }
 $v = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value

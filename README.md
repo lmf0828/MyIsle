@@ -6,12 +6,12 @@
 
 **把「灵动岛」带到 Windows 桌面 · 开源 · 轻量 · 原生 Rust**
 
-[![Release](https://img.shields.io/github/v/release/lmf0828/WinIsle?display_name=tag&sort=semver)](https://github.com/lmf0828/WinIsle/releases/latest)
+[![Release](https://img.shields.io/github/v/release/long-mf/WinIsle?display_name=tag&sort=semver)](https://github.com/long-mf/WinIsle/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-34d399)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0ea5e9)
 ![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange)
 
-[🌐 官方网站](https://lmf0828.github.io/WinIsle/) · [下载安装](https://github.com/lmf0828/WinIsle/releases/latest) · [问题反馈](https://github.com/lmf0828/WinIsle/issues)
+[🌐 官方网站](https://long-mf.github.io/WinIsle/) · [下载安装](https://github.com/long-mf/WinIsle/releases/latest) · [问题反馈](https://github.com/long-mf/WinIsle/issues)
 
 </div>
 
@@ -25,7 +25,7 @@
 - **轻量安静**：常驻内存占用低，收起态只占一条小岛，不打断工作。
 - **开箱即用**：支持系统媒体控制（Windows SMTC）、网易云音乐 / 汽水音乐实时歌词、逐字卡拉 OK 高亮、毛玻璃展开动画与桌面托盘。
 
-> **官网：** <https://lmf0828.github.io/WinIsle/>
+> **官网：** <https://long-mf.github.io/WinIsle/>
 
 ## 功能特性
 
@@ -56,7 +56,7 @@
 
 ## 下载与安装
 
-前往 **[Releases](https://github.com/lmf0828/WinIsle/releases/latest)** 获取：
+前往 **[Releases](https://github.com/long-mf/WinIsle/releases/latest)** 获取：
 
 - `WinIsle-Setup-<ver>.exe` — 安装包（Inno Setup，支持按用户安装 / 开机自启）。
 - `WinIsle-<ver>-portable.zip` — 免安装绿色版，解压即用。
@@ -107,8 +107,8 @@ scripts/         构建 / 打包 / 工具脚本
 
 ## 链接
 
-- 🌐 官网：<https://lmf0828.github.io/WinIsle/>
-- 💻 仓库：<https://github.com/lmf0828/WinIsle>
-- 🐞 反馈：<https://github.com/lmf0828/WinIsle/issues>
+- 🌐 官网：<https://long-mf.github.io/WinIsle/>
+- 💻 仓库：<https://github.com/long-mf/WinIsle>
+- 🐞 反馈：<https://github.com/long-mf/WinIsle/issues>
 
-<div align="center"><sub>© 2026 lmf0828 · WinIsle · 用 Rust 点亮 Windows 顶部的一条小岛</sub></div>
+<div align="center"><sub>© 2026 long-mf · WinIsle · 用 Rust 点亮 Windows 顶部的一条小岛</sub></div>
