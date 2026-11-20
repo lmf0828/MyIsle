@@ -356,7 +356,7 @@ pub fn ensure_erase_guard(hwnd: HWND) {
 /// - 光标在岛体/面板内 => 关闭穿透（可悬停、拖动、点击）
 /// - 光标在透明边距/窗口外 => 打开穿透（点击落到下方窗口，跨进程生效）
 /// 若按住左键且当前可交互，则保持可交互，避免拖拽途中被切成穿透。
-/// 同时每 8ms 重新断言一次，抵消 winit 在 set_outer_position/set_inner_size 时重置扩展样式。
+/// 同时每 16ms 重新断言一次，抵消 winit 在 set_outer_position/set_inner_size 时重置扩展样式。
 pub fn start_click_through_poller(hwnd: HWND) {
     if hwnd == 0 { return; }
     if std::env::var_os("WINISLE_NOCTP").is_some() { return; }
@@ -389,7 +389,7 @@ pub fn start_click_through_poller(hwnd: HWND) {
                 let dragging = DRAGGING.load(Ordering::Relaxed) != 0;
                 // 兜底：某些环境下窗口创建后会被系统/winit 停留在隐藏状态（“岛不见了”）。
                 // 周期性检查，若不可见就重新显示（不抢焦点）。约每 320ms 一次。
-                if n % 40 == 0 && IsWindowVisible(hwnd) == 0 {
+                if n % 20 == 0 && IsWindowVisible(hwnd) == 0 {
                     show_island(hwnd);
                 }
                 // 周期/拖动时重新断言无边框样式，抵消跨 DPI 显示器移动时系统画回标题栏的问题
@@ -431,7 +431,7 @@ pub fn start_click_through_poller(hwnd: HWND) {
                     }
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            std::thread::sleep(std::time::Duration::from_millis(16));
         }
     });
 }

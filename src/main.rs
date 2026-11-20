@@ -954,6 +954,9 @@ struct IslandApp {
     last_title_at: Instant,
     /// 音乐模块显示程度 0..1：用于宽胶囊/内容/空态的平滑过渡动画
     music_amt: f32,
+    /// 音乐「正在运动」：正在播放，或 music_amt 仍在淡入淡出（需 60fps）；
+    /// 暂停且已稳定时为 false → 收起态允许降到 16.7fps，避免挂机时空烧 CPU。
+    music_motion: bool,
     /// 最近一次显示过的歌词行号（滞回，避免边界处来回跳）
     lyr_idx_last: i32,
     /// 收起态歌词“上滚”动画：换行瞬间的时刻，以及上一句（滚出）的索引
@@ -981,6 +984,9 @@ struct IslandApp {
     /// 上一帧向事件循环申请的休眠毫秒数；用于自适应估算“每帧实际耗时(含绘制)”，
     /// 从而把 request_repaint_after 的时长扣掉工作耗时，让帧周期精确落到目标（60fps）。
     prev_req_ms: f32,
+    /// 最近一次“需要高帧率”的时刻（悬停/拖动/播放/展开动画/入场等）。用于在完全静止 600ms 后
+    /// 把常驻重绘降到低帧率（含展开面板静止时），省 CPU 又能在交互后保持丝滑。
+    last_busy: Instant,
     /// 启动入场动画的起始时刻（窗口首次真正显示那一刻才置为 Some；此前画 0 不透明度，避免提前走完动画）。
     intro_start: Option<Instant>,
     /// 进程内启动基准时刻（用于窗口可见性检测失败时的兜底启动淡入）。
@@ -1220,6 +1226,7 @@ impl IslandApp {
             last_title: None,
             last_title_at: Instant::now() - Duration::from_secs(60),
             music_amt: 0.0,
+            music_motion: false,
             lyr_idx_last: -1,
             lyr_anim_at: None,
             lyr_anim_from: None,
@@ -1233,6 +1240,7 @@ impl IslandApp {
             wave_mix: 0.0,
             frame_last: Instant::now() - Duration::from_millis(20),
             prev_req_ms: 16.0,
+            last_busy: Instant::now(),
             intro_start: None,
             boot_at: Instant::now(),
             // 入场动画默认关闭：改为和以前一样「双击后直接出现在顶部」（不再有从上方落下的黑边一闪）。
@@ -1655,27 +1663,32 @@ impl IslandApp {
     }
 
     /// 解析内嵌的表情动画二进制（MFAN）：返回每个表情 (w, h, 帧数, 像素起始偏移)。
-    fn face_anim_meta() -> Vec<(u16, u16, u16, usize)> {
-        const ANIM: &[u8] = include_bytes!("assets/faces_anim.bin");
-        let mut out = Vec::new();
-        if ANIM.len() < 8 || &ANIM[0..4] != b"MFAN" {
-            return out;
-        }
-        let count = u16::from_le_bytes([ANIM[6], ANIM[7]]) as usize;
-        let mut p = 8usize;
-        for _ in 0..count {
-            if p + 6 > ANIM.len() {
-                break;
+    /// 结果与静态资源一一对应、永不变化 → 用 OnceLock 缓存，避免每帧重复解析+分配。
+    fn face_anim_meta() -> &'static Vec<(u16, u16, u16, usize)> {
+        use std::sync::OnceLock;
+        static CACHE: OnceLock<Vec<(u16, u16, u16, usize)>> = OnceLock::new();
+        CACHE.get_or_init(|| {
+            const ANIM: &[u8] = include_bytes!("assets/faces_anim.bin");
+            let mut out = Vec::new();
+            if ANIM.len() < 8 || &ANIM[0..4] != b"MFAN" {
+                return out;
             }
-            let w = u16::from_le_bytes([ANIM[p], ANIM[p + 1]]);
-            let h = u16::from_le_bytes([ANIM[p + 2], ANIM[p + 3]]);
-            let fc = u16::from_le_bytes([ANIM[p + 4], ANIM[p + 5]]);
-            p += 6;
-            let off = p;
-            p += (w as usize) * (h as usize) * (fc as usize);
-            out.push((w, h, fc, off));
-        }
-        out
+            let count = u16::from_le_bytes([ANIM[6], ANIM[7]]) as usize;
+            let mut p = 8usize;
+            for _ in 0..count {
+                if p + 6 > ANIM.len() {
+                    break;
+                }
+                let w = u16::from_le_bytes([ANIM[p], ANIM[p + 1]]);
+                let h = u16::from_le_bytes([ANIM[p + 2], ANIM[p + 3]]);
+                let fc = u16::from_le_bytes([ANIM[p + 4], ANIM[p + 5]]);
+                p += 6;
+                let off = p;
+                p += (w as usize) * (h as usize) * (fc as usize);
+                out.push((w, h, fc, off));
+            }
+            out
+        })
     }
 
     /// 计算某表情「所有帧的不透明内容」并集 UV 包围盒 (u0,v0,u1,v1)，用于裁掉透明留白。
@@ -1742,14 +1755,24 @@ impl IslandApp {
     }
 
     /// 某表情内容包围盒对应的“可视宽高比”。
+    /// 纯函数（只依赖静态资源 + idx），每帧会被布局多次调用 → 用缓存避免重复的全像素包围盒扫描。
     fn face_content_aspect(idx: usize) -> f32 {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        static CACHE: OnceLock<Mutex<HashMap<usize, f32>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Some(v) = cache.lock().unwrap().get(&idx) {
+            return *v;
+        }
         let metas = Self::face_anim_meta();
         let (w, h) = metas
             .get(idx)
             .map(|m| (m.0 as f32, m.1 as f32))
             .unwrap_or((77.0, 80.0));
         let (u0, v0, u1, v1) = Self::face_content_uv_compute(idx);
-        ((w * (u1 - u0)) / (h * (v1 - v0)).max(1.0)).max(0.2)
+        let aspect = ((w * (u1 - u0)) / (h * (v1 - v0)).max(1.0)).max(0.2);
+        cache.lock().unwrap().insert(idx, aspect);
+        aspect
     }
 
     fn face_content_uv(&mut self, idx: usize) -> (f32, f32, f32, f32) {
@@ -2970,8 +2993,9 @@ impl IslandApp {
             }
             x = x1;
         }
-        if self.music_amt > 0.01 {
-            // 播放中：歌词逐字渐绿/跑马灯 + 频谱都要 60fps，保证会动的模块绝不掉帧。
+        if self.music_motion {
+            // 播放中 / 淡入淡出中：歌词逐字渐绿/跑马灯 + 频谱都要 60fps，保证会动的模块绝不掉帧。
+            // 暂停且静止时 music_motion=false，这里不再强求 16ms，交由表情/天气的 60ms 兜底（≈16.7fps）。
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
         }
         if comps.iter().any(|(id, _)| id.as_str() == "weather") {
@@ -2986,7 +3010,10 @@ impl IslandApp {
         let base_speed = 3.2f32;
         let dt = ((t - self.spec_last_t) as f32).clamp(0.0, 0.1);
         self.spec_last_t = t;
-        self.spec_phase += (dt * base_speed) as f64;
+        // 仅在「音乐在运动」时推进相位；暂停/静止时冻结竖条，避免低帧率下逐帧跳动。
+        if self.music_motion {
+            self.spec_phase += (dt * base_speed) as f64;
+        }
         for k in 0..3 {
             let ph = (self.spec_phase + (k as f64) * 1.4).sin() as f32 * 0.5 + 0.5;
             let hgt = 4.0 + ph * 8.0;
@@ -6622,6 +6649,10 @@ impl eframe::App for IslandApp {
                 // 幅度按真实 dt 推进，改 16ms 后收敛时长不变（≈0.8s），只是帧数降到 60fps。
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
+            // 「音乐在运动」判定：正在播放，或 music_amt 仍在淡入淡出 → 需要 60fps；
+            // 暂停且已稳定（amt 到位且未在播放）→ false，允许收起态降到 16.7fps 省 CPU。
+            self.music_motion = (self.music_amt - target_amt).abs() >= 0.004
+                || (self.music_amt > 0.01 && self.is_playing());
             // 调试钩子：强制按“无音乐”渲染收起态（用于截图表情）
             if std::env::var("WINISLE_FACE").is_ok() {
                 self.music_amt = 0.0;
@@ -7232,22 +7263,27 @@ impl eframe::App for IslandApp {
         // 自适应重绘：展开态、播放中、悬停/拖动时保持高帧率（约120fps）；收起且静止时降到 10fps，
         // 避免空闲也满核渲染导致发热、掉帧和「不丝滑」。
         let pointer_active = ctx.input(|i| i.pointer.has_pointer() || i.pointer.any_down());
-        let animating = !self.intro_done
+        // “需要高帧率”的条件：入场/退场、展开收起过渡、音乐动画、拖动、吸附、更新检查、鼠标悬停。
+        // 注意：不再用「expanded>0.01」把展开面板永久钉在 60fps——展开后若完全静止（未播放、无悬停、
+        // 无过渡），allow idle 降帧，省 CPU。交互/动画结束后留 600ms 宽限，过渡（<0.6s）不被打断。
+        let busy = !self.intro_done
             || self.cloaked
             || self.exit_start.is_some()
             || self.intro_dy() != 0.0
             || (self.cb_anim > 0.002 && self.cb_anim < 0.998)
             || (self.expanded - self.target).abs() > 0.002
-            || self.expanded > 0.01
-            || self.music.playing
-            || self.music_amt > 0.01
+            || self.music_motion
             || self.dragging
             || self.settle.is_some()
             || self.upd_ver.is_some()
             || self.upd_checking
             || self.upd_busy
             || pointer_active;
-        let animating = animating && std::env::var_os("WINISLE_IDLE").is_none();
+        if busy {
+            self.last_busy = Instant::now();
+        }
+        let animating = (busy || self.last_busy.elapsed() < Duration::from_millis(600))
+            && std::env::var_os("WINISLE_IDLE").is_none();
         // 目标帧间隔：动画态锚定 16ms（约 60fps，满足“动态模块 ≥60fps”的硬约束）；静止态 200ms（约 5fps）。
         // 历史上这里是 8ms（约 125fps），实测“收起 + 播放中”会常驻吃满 1 个 CPU 核，故按 60fps 锚定。
         let target_ms: u64 = if animating { 16 } else { 200 };
@@ -7884,11 +7920,11 @@ fn install_fonts(ctx: &egui::Context) {
     // 并提供真正的粗体（notob），修复此前“中文标题无真粗体、发细发平”的问题。
     fonts.font_data.insert(
         "noto".to_owned(),
-        egui::FontData::from_owned(include_bytes!("../assets/NotoSansSC-Regular.otf").to_vec()).into(),
+        egui::FontData::from_static(include_bytes!("../assets/NotoSansSC-Regular.otf")).into(),
     );
     fonts.font_data.insert(
         "notob".to_owned(),
-        egui::FontData::from_owned(include_bytes!("../assets/NotoSansSC-Bold.otf").to_vec()).into(),
+        egui::FontData::from_static(include_bytes!("../assets/NotoSansSC-Bold.otf")).into(),
     );
 
     if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
