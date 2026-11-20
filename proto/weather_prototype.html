@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WinIsle · 天气模块可交互原型</title>
+<style>
+  :root{--ink:#e9edf3;--muted:#9aa4b2;--muted2:#6f7a89;--line:rgba(255,255,255,.07);--accent:#2fd6a6;--accent2:#39c7ff}
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:#0b0e13;color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  body{display:flex;flex-direction:column;align-items:center;padding:30px 0 60px;gap:6px}
+  .block{width:1100px;margin-bottom:22px}
+  .cap{color:#6f7a89;font-size:12.5px;margin:0 0 12px}
+  .desktop{position:relative;width:1100px;border-radius:16px;overflow:hidden;
+    background:
+      radial-gradient(600px 220px at 50% -40%, rgba(57,199,255,.18), transparent 60%),
+      radial-gradient(600px 260px at 85% 120%, rgba(47,214,166,.12), transparent 60%),
+      linear-gradient(180deg,#141a24,#0c1016);
+    border:1px solid rgba(255,255,255,.06);
+    display:flex;justify-content:center;align-items:flex-start}
+  .desktop.col{height:140px}
+  .desktop.exp{padding:26px 0 30px}
+  .desktop::after{content:"模拟桌面背景";position:absolute;right:14px;bottom:10px;font-size:11px;color:rgba(255,255,255,.16)}
+
+  /* ===== 按天气条件切换桌面氛围光 ===== */
+  .cond-sun{--glow:rgba(255,200,80,.36);background:radial-gradient(600px 260px at 72% -8%, rgba(255,196,80,.26), transparent 62%),radial-gradient(600px 260px at 10% 120%, rgba(47,214,166,.10), transparent 60%),linear-gradient(180deg,#191c22,#0c1016)!important}
+  .cond-partly{--glow:rgba(255,210,120,.28);background:radial-gradient(600px 260px at 68% -10%, rgba(255,205,110,.18), transparent 62%),radial-gradient(600px 260px at 12% 120%, rgba(120,180,220,.12), transparent 60%),linear-gradient(180deg,#161b22,#0c1016)!important}
+  .cond-cloud{--glow:rgba(150,180,210,.24);background:radial-gradient(600px 260px at 60% -10%, rgba(150,180,210,.16), transparent 62%),linear-gradient(180deg,#141a22,#0b0f15)!important}
+  .cond-rain{--glow:rgba(90,150,255,.32);background:radial-gradient(600px 280px at 60% -10%, rgba(80,140,255,.20), transparent 62%),radial-gradient(600px 260px at 12% 120%, rgba(57,199,255,.10), transparent 60%),linear-gradient(180deg,#111722,#0a0e15)!important}
+  .cond-snow{--glow:rgba(160,220,255,.34);background:radial-gradient(600px 280px at 60% -10%, rgba(170,225,255,.18), transparent 62%),linear-gradient(180deg,#141a24,#0b1017)!important}
+  .cond-thunder{--glow:rgba(175,125,255,.36);background:radial-gradient(600px 280px at 58% -10%, rgba(150,110,255,.20), transparent 62%),radial-gradient(600px 260px at 12% 120%, rgba(90,140,255,.10), transparent 60%),linear-gradient(180deg,#13121f,#090b14)!important}
+  .cond-fog{--glow:rgba(175,185,200,.22);background:radial-gradient(600px 260px at 50% -10%, rgba(170,180,195,.14), transparent 62%),linear-gradient(180deg,#15191f,#0b0e12)!important}
+  .cond-night{--glow:rgba(120,135,255,.30);background:radial-gradient(600px 280px at 65% -10%, rgba(110,120,255,.18), transparent 62%),linear-gradient(180deg,#0e1120,#070911)!important}
+
+  /* ===== 收起态 刘海胶囊 ===== */
+  .pill{display:inline-flex;align-items:center;gap:11px;height:36px;padding:0 16px;
+    border-radius:0 0 18px 18px;background:linear-gradient(180deg,#20262f,#171c24);
+    border:1px solid rgba(255,255,255,.08);border-top:0;
+    box-shadow:0 8px 24px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+    color:#c6cfda;font-size:13.5px}
+  .pill .picon{width:22px;height:22px;flex:0 0 22px;display:flex;align-items:center;justify-content:center}
+  .pill .pcity{color:#aeb8c4}
+  .pill .ptemp{font-weight:700;color:#eef5fd;font-variant-numeric:tabular-nums}
+  .pill .pcond{color:var(--accent2)}
+  .pill .sep{width:1px;height:14px;background:rgba(255,255,255,.12)}
+  .pill .clock{font-variant-numeric:tabular-nums;font-weight:600;color:#dfe6ef}
+  .pill .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+
+  /* ===== 展开态 面板 ===== */
+  .panel{width:720px;border-radius:22px;background:linear-gradient(180deg,rgba(30,36,45,.97),rgba(22,27,34,.99));
+    border:1px solid rgba(255,255,255,.08);box-shadow:0 24px 60px rgba(0,0,0,.6);display:flex;overflow:hidden}
+  .rail{width:66px;flex:0 0 66px;padding:12px 0;display:flex;flex-direction:column;align-items:center;gap:8px;
+    background:rgba(0,0,0,.22);border-right:1px solid var(--line)}
+  .ritem{width:48px;border:0;background:transparent;color:var(--muted2);cursor:pointer;border-radius:12px;padding:8px 0 6px;
+    display:flex;flex-direction:column;align-items:center;gap:3px;font-family:inherit;transition:.15s}
+  .ritem .rg{font-size:17px;line-height:1}.ritem .rl{font-size:10.5px}
+  .ritem:hover{color:var(--muted)}
+  .ritem.active{color:#062a20;background:linear-gradient(180deg,#2fd6a6,#23c295);box-shadow:0 6px 14px rgba(47,214,166,.3)}
+  .rail .spacer{flex:1 1 auto}
+  .content{flex:1 1 auto;min-width:0;padding:15px 18px 16px}
+
+  /* ===== 天气页头 ===== */
+  .wxtop{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .citywrap{position:relative}
+  .citybtn{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.05);border:1px solid var(--line);
+    color:var(--ink);font-family:inherit;font-size:13.5px;font-weight:600;padding:5px 11px;border-radius:10px;cursor:pointer}
+  .citybtn:hover{background:rgba(255,255,255,.09)}
+  .citybtn .pin{font-size:12px;opacity:.9}.citybtn .chev{font-size:10px;color:var(--muted)}
+  .citymenu{position:absolute;top:38px;left:0;min-width:168px;background:#1b222c;border:1px solid rgba(255,255,255,.1);
+    border-radius:12px;padding:6px;box-shadow:0 18px 44px rgba(0,0,0,.55);z-index:30;display:none}
+  .citymenu.open{display:block}
+  .citymenu button{width:100%;display:flex;justify-content:space-between;gap:12px;align-items:center;background:transparent;
+    border:0;color:var(--ink);font-family:inherit;font-size:13px;padding:8px 10px;border-radius:8px;cursor:pointer;text-align:left}
+  .citymenu button:hover{background:rgba(47,214,166,.14)}
+  .citymenu button .mt{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+  .upd{font-size:11.5px;color:var(--muted2)}
+  .upd b{color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums}
+
+  /* ===== hero ===== */
+  .hero{display:flex;align-items:center;gap:18px;padding:6px 2px 4px}
+  .heroIcon{position:relative;width:96px;height:96px;flex:0 0 96px;display:flex;align-items:center;justify-content:center}
+  .heroIcon::before{content:"";position:absolute;inset:-28%;border-radius:50%;
+    background:radial-gradient(circle, var(--glow, rgba(255,205,90,.28)), transparent 68%);filter:blur(3px)}
+  .heroIcon .ic{position:relative;z-index:1}
+  .heroMain{flex:1 1 auto;min-width:0}
+  .tempRow{display:flex;align-items:baseline;gap:2px}
+  .bigTemp{font-size:56px;font-weight:200;line-height:.95;color:#eef5fd;letter-spacing:-2px;font-variant-numeric:tabular-nums}
+  .deg{font-size:26px;font-weight:300;color:var(--accent2);margin-right:12px}
+  .condText{font-size:16px;font-weight:600;color:#dfe7f1}
+  .subline{font-size:12.5px;color:var(--muted);margin-top:6px}
+  .badges{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
+  .badge{font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid transparent;font-weight:600}
+  .b-good{color:#083b2c;background:linear-gradient(180deg,#34e0b0,#22c295)}
+  .b-mid{color:#3a2c00;background:linear-gradient(180deg,#ffe07a,#f4c53a)}
+  .b-bad{color:#3a0f0f;background:linear-gradient(180deg,#ffb3a8,#f2795f)}
+  .b-soft{color:#cfd7e2;background:rgba(255,255,255,.07);border-color:var(--line);font-weight:500}
+
+  /* ===== 分区标题 ===== */
+  .sec-title{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted2);margin:16px 0 8px;letter-spacing:.3px}
+  .sec-title::after{content:"";flex:1 1 auto;height:1px;background:var(--line)}
+
+  /* ===== 逐小时 ===== */
+  .hourly{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+  .hourly::-webkit-scrollbar{height:5px}.hourly::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:9px}
+  .hour{flex:0 0 54px;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:12px;
+    padding:8px 4px 7px;display:flex;flex-direction:column;align-items:center;gap:5px}
+  .hour.now{border-color:rgba(47,214,166,.5);background:rgba(47,214,166,.08)}
+  .hour .hh{font-size:10.5px;color:var(--muted2)}
+  .hour .ht{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+  .hour .hp{font-size:9.5px;color:var(--accent2);font-variant-numeric:tabular-nums}
+  .mini{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
+
+  /* ===== 7 天 ===== */
+  .daily{display:flex;flex-direction:column}
+  .drow{display:grid;grid-template-columns:58px 30px 92px 1fr 92px;align-items:center;gap:12px;
+    padding:7px 2px;border-bottom:1px solid rgba(255,255,255,.05);font-size:12.5px}
+  .drow:last-child{border-bottom:0}
+  .dday{color:#d6dee8;font-weight:600;line-height:1.15}
+  .dday span{display:block;font-size:10px;color:var(--muted2);font-weight:400;font-variant-numeric:tabular-nums}
+  .dicon{width:30px;height:24px;display:flex;align-items:center;justify-content:center}
+  .dcond{color:var(--muted)}
+  .drange{position:relative;height:5px;border-radius:99px;background:rgba(255,255,255,.1)}
+  .dfill{position:absolute;top:0;height:100%;border-radius:99px;background:linear-gradient(90deg,#39c7ff,#2fd6a6);box-shadow:0 0 8px rgba(47,214,166,.3)}
+  .dtemp{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+  .dtemp b{color:#eef5fd;font-weight:700}
+
+  /* ===== 详情 ===== */
+  .details{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+  .dcard{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.05);border-radius:12px;padding:9px 12px}
+  .dlab{font-size:10.5px;color:var(--muted2);display:flex;align-items:center;gap:5px}
+  .dlab .di{font-size:12px;opacity:.85}
+  .dval{font-size:16px;font-weight:600;margin-top:5px;color:#eaf1f9;font-variant-numeric:tabular-nums}
+  .dval small{font-size:10.5px;color:var(--muted);font-weight:400;margin-left:2px}
+
+  /* ===== 其它模块占位 ===== */
+  .ph{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;height:100%;min-height:360px;color:var(--muted2)}
+  .ph .phg{font-size:40px;opacity:.6}
+  .ph .pht{font-size:13px}
+
+  /* ===== 演示工具条 ===== */
+  .demo-bar{width:1100px;display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin:0 0 4px;
+    padding:11px 16px;border-radius:14px;background:linear-gradient(180deg,#151b24,#10151c);
+    border:1px solid rgba(255,255,255,.07);font-size:12.5px;color:var(--muted)}
+  .demo-bar .grp{display:flex;align-items:center;gap:8px}
+  .demo-bar .glab{color:var(--muted2);font-size:11.5px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--muted);font-family:inherit;
+    font-size:12px;padding:4px 10px;border-radius:99px;cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:5px}
+  .chip:hover{background:rgba(255,255,255,.08);color:var(--ink)}
+  .chip.on{background:linear-gradient(180deg,#2fd6a6,#23c295);color:#062a20;border-color:transparent;font-weight:600;box-shadow:0 4px 12px rgba(47,214,166,.28)}
+  .demo-bar .hint{margin-left:auto;color:var(--muted2);font-size:11.5px}
+
+  /* ===== 天气图标（SVG） ===== */
+  .ic{display:block;width:100%;height:100%;overflow:visible}
+  .ic .spin{transform-box:fill-box;transform-origin:center;animation:spin 18s linear infinite}
+  .ic .drift{transform-box:fill-box;transform-origin:center;animation:drift 5s ease-in-out infinite}
+  .ic-rain .drop,.ic-thunder .drop{animation:fall .85s linear infinite}
+  .ic-rain .d2{animation-delay:.22s}.ic-rain .d3{animation-delay:.11s}.ic-rain .d4{animation-delay:.33s}
+  .ic-thunder .d2{animation-delay:.28s}
+  .ic-snow .flk{animation:snowfall 2.4s linear infinite}
+  .ic-snow .f2{animation-delay:.8s}.ic-snow .f3{animation-delay:1.5s}
+  .ic-thunder .flash{animation:flash 2.6s ease-in-out infinite}
+  .ic-night .tw{animation:twinkle 2.4s ease-in-out infinite}
+  .ic-night .t2{animation-delay:.7s}.ic-night .t3{animation-delay:1.3s}
+  .ic-fog .g1{animation:fogmove 5s ease-in-out infinite}
+  .ic-fog .g2{animation:fogmove 6.5s ease-in-out infinite reverse}
+  .ic-fog .g3{animation:fogmove 5.6s ease-in-out infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes drift{0%,100%{transform:translateX(-1.5px)}50%{transform:translateX(1.5px)}}
+  @keyframes fall{0%{transform:translateY(-2px);opacity:0}20%{opacity:1}100%{transform:translateY(8px);opacity:0}}
+  @keyframes snowfall{0%{transform:translateY(-2px);opacity:0}15%{opacity:1}100%{transform:translateY(9px);opacity:0}}
+  @keyframes twinkle{0%,100%{opacity:.25}50%{opacity:1}}
+  @keyframes flash{0%,92%,100%{opacity:0}94%{opacity:.9}96%{opacity:0}98%{opacity:.7}}
+  @keyframes fogmove{0%,100%{transform:translateX(-3px)}50%{transform:translateX(3px)}}
+</style>
+</head>
+<body>
+  <div class="demo-bar">
+    <div class="grp"><span class="glab">切换城市</span><span class="chip on" id="cityChip">北京 ▾</span></div>
+    <div class="grp"><span class="glab">天气动画预览</span>
+      <div class="chips" id="kindChips">
+        <button class="chip" data-kind="sun">☀ 晴</button>
+        <button class="chip" data-kind="partly">⛅ 多云</button>
+        <button class="chip" data-kind="cloud">☁ 阴</button>
+        <button class="chip" data-kind="rain">🌧 雨</button>
+        <button class="chip" data-kind="thunder">⛈ 雷</button>
+        <button class="chip" data-kind="snow">❄ 雪</button>
+        <button class="chip" data-kind="fog">🌫 雾</button>
+        <button class="chip" data-kind="night">🌙 夜</button>
+      </div>
+    </div>
+    <div class="hint">点城市下拉 / 天气动画 → 实时预览；左侧栏可切模块</div>
+  </div>
+
+  <div class="block">
+    <div class="cap">① 收起态 · 顶部常显（天气图标 + 城市 + 温度 + 天气 + 时间）</div>
+    <div class="desktop col cond-sun" id="deskCol">
+      <div class="pill" id="pill"></div>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="cap">② 展开态 · 天气主页（今日概览 / 逐小时 / 7 天 / 详细指标）</div>
+    <div class="desktop exp cond-sun" id="deskExp">
+      <div class="panel">
+        <div class="rail">
+          <button class="ritem" data-tab="music"><span class="rg">♪</span><span class="rl">音乐</span></button>
+          <button class="ritem active" data-tab="weather"><span class="rg">⛅</span><span class="rl">天气</span></button>
+          <button class="ritem" data-tab="calendar"><span class="rg">▦</span><span class="rl">日历</span></button>
+          <button class="ritem" data-tab="unread"><span class="rg">✉</span><span class="rl">未读</span></button>
+          <div class="spacer"></div>
+          <button class="ritem" data-tab="settings"><span class="rg">⚙</span><span class="rl">设置</span></button>
+        </div>
+        <div class="content">
+          <div id="wxPage">
+            <div class="wxtop">
+              <div class="citywrap">
+                <button class="citybtn" id="cityBtn"><span class="pin">📍</span><span id="cityName">北京</span><span class="chev">▾</span></button>
+                <div class="citymenu" id="cityMenu"></div>
+              </div>
+              <div class="upd">更新于 <b id="updTime">14:32</b> · 中国天气网</div>
+            </div>
+
+            <div class="hero">
+              <div class="heroIcon" id="heroIcon"></div>
+              <div class="heroMain">
+                <div class="tempRow">
+                  <span class="bigTemp" id="bigTemp">24</span><span class="deg">°</span>
+                  <span class="condText" id="condText">晴</span>
+                </div>
+                <div class="subline" id="subline">体感 26° · 最高 28° / 最低 18°</div>
+                <div class="badges">
+                  <span class="badge b-good" id="aqiBadge">空气 优 32</span>
+                  <span class="badge b-soft" id="uvBadge">紫外线 中等</span>
+                  <span class="badge b-soft" id="windBadge">西北风 3 级</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sec-title">逐小时预报</div>
+            <div class="hourly" id="hourly"></div>
+
+            <div class="sec-title">7 天预报</div>
+            <div class="daily" id="daily"></div>
+
+            <div class="sec-title">天气详情</div>
+            <div class="details" id="details"></div>
+          </div>
+
+          <div class="ph" id="tabPlaceholder" style="display:none">
+            <div class="phg" id="phIcon">♪</div>
+            <div class="pht" id="phText">「音乐」模块原型未包含在此页面</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ================= 图标 ================= */
+function icon(kind){
+  const cloudDef=`<linearGradient id="cg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8fbff"/><stop offset="1" stop-color="#cddaea"/></linearGradient>`;
+  const sunDef=`<radialGradient id="sunG" cx="38%" cy="34%" r="66%"><stop offset="0" stop-color="#fff8d0"/><stop offset=".55" stop-color="#ffd25c"/><stop offset="1" stop-color="#ffa92a"/></radialGradient>`;
+  const cloudPath=`M20 46 Q11 46 11 37.5 Q11 30 19 29.5 Q20 19 31 19 Q42 19 44 27.5 Q53 26.5 55 35 Q57 46 46 46 Z`;
+  const rays=`<g stroke="#ffcf68" stroke-width="2.6" stroke-linecap="round"><line x1="32" y1="3.5" x2="32" y2="10"/><line x1="32" y1="54" x2="32" y2="60.5"/><line x1="3.5" y1="32" x2="10" y2="32"/><line x1="54" y1="32" x2="60.5" y2="32"/><line x1="11.8" y1="11.8" x2="16.4" y2="16.4"/><line x1="47.6" y1="47.6" x2="52.2" y2="52.2"/><line x1="52.2" y1="11.8" x2="47.6" y2="16.4"/><line x1="16.4" y1="47.6" x2="11.8" y2="52.2"/></g>`;
+  switch(kind){
+    case 'sun': return `<svg class="ic ic-sun" viewBox="0 0 64 64"><defs>${sunDef}</defs><g class="spin">${rays}</g><circle cx="32" cy="32" r="12.5" fill="url(#sunG)"/></svg>`;
+    case 'partly': return `<svg class="ic ic-partly" viewBox="0 0 64 64"><defs>${sunDef}${cloudDef}</defs><g><g stroke="#ffcf68" stroke-width="2" stroke-linecap="round"><line x1="46" y1="7" x2="46" y2="10.5"/><line x1="33" y1="20" x2="36.5" y2="20"/><line x1="59" y1="20" x2="55.5" y2="20"/><line x1="37" y1="11" x2="39.5" y2="13.5"/><line x1="55" y1="11" x2="52.5" y2="13.5"/></g><circle cx="46" cy="20" r="8.2" fill="url(#sunG)"/></g><g class="drift"><path d="${cloudPath}" transform="translate(-5,7)" fill="url(#cg)" stroke="rgba(255,255,255,.45)" stroke-width=".6"/></g></svg>`;
+    case 'cloud': return `<svg class="ic ic-cloud" viewBox="0 0 64 64"><defs>${cloudDef}</defs><g class="drift"><path d="${cloudPath}" fill="url(#cg)" stroke="rgba(255,255,255,.45)" stroke-width=".6"/></g></svg>`;
+    case 'rain': return `<svg class="ic ic-rain" viewBox="0 0 64 64"><defs>${cloudDef}</defs><g transform="translate(0,-4)"><path d="${cloudPath}" fill="url(#cg)" stroke="rgba(255,255,255,.4)" stroke-width=".6"/></g><g stroke="#82c8ff" stroke-width="2.6" stroke-linecap="round"><line class="drop d1" x1="23" y1="46" x2="21" y2="53"/><line class="drop d2" x1="31" y1="46" x2="29" y2="53"/><line class="drop d3" x1="39" y1="46" x2="37" y2="53"/><line class="drop d4" x1="47" y1="46" x2="45" y2="53"/></g></svg>`;
+    case 'snow': return `<svg class="ic ic-snow" viewBox="0 0 64 64"><defs>${cloudDef}</defs><g transform="translate(0,-4)"><path d="${cloudPath}" fill="url(#cg)" stroke="rgba(255,255,255,.4)" stroke-width=".6"/></g><g fill="#eaf6ff"><circle class="flk f1" cx="24" cy="48" r="1.9"/><circle class="flk f2" cx="33" cy="48" r="1.9"/><circle class="flk f3" cx="42" cy="48" r="1.9"/></g></svg>`;
+    case 'thunder': return `<svg class="ic ic-thunder" viewBox="0 0 64 64"><defs>${cloudDef}</defs><g transform="translate(0,-3)"><path d="${cloudPath}" fill="url(#cg)" stroke="rgba(255,255,255,.4)" stroke-width=".6"/></g><circle class="flash" cx="32" cy="42" r="18" fill="#fff6b0"/><path class="bolt" d="M35 39 L23 54 L31 54 L26 63 L42 46 L34 46 Z" fill="#ffe066" stroke="#ffcf4d" stroke-width=".7" stroke-linejoin="round"/><g stroke="#82c8ff" stroke-width="2.3" stroke-linecap="round"><line class="drop d2" x1="20" y1="47" x2="18" y2="53"/><line class="drop" x1="46" y1="47" x2="44" y2="53"/></g></svg>`;
+    case 'fog': return `<svg class="ic ic-fog" viewBox="0 0 64 64"><g stroke="#e2ebf5" stroke-width="3.4" stroke-linecap="round" opacity=".85"><line class="g1" x1="15" y1="25" x2="49" y2="25"/><line class="g2" x1="10" y1="35" x2="45" y2="35"/><line class="g3" x1="17" y1="45" x2="53" y2="45"/></g></svg>`;
+    case 'night': return `<svg class="ic ic-night" viewBox="0 0 64 64"><defs><linearGradient id="moonG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fdfbf0"/><stop offset="1" stop-color="#dbe3f4"/></linearGradient><mask id="cres"><rect width="64" height="64" fill="#fff"/><circle cx="40" cy="27" r="11.5" fill="#000"/></mask></defs><circle cx="33" cy="33" r="13" fill="url(#moonG)" mask="url(#cres)"/><g fill="#eaf0ff"><circle class="tw" cx="49" cy="16" r="1.5"/><circle class="tw t2" cx="20" cy="17" r="1.1"/><circle class="tw t3" cx="52" cy="41" r="1.2"/></g></svg>`;
+    default: return icon('sun');
+  }
+}
+
+/* ================= 数据 ================= */
+const WD=['周日','周一','周二','周三','周四','周五','周六'];
+function labels(){const now=new Date();const a=[];for(let i=0;i<7;i++){const d=new Date(now.getTime()+i*864e5);a.push({lab:i===0?'今天':i===1?'明天':WD[d.getDay()],date:(d.getMonth()+1)+'/'+d.getDate()});}return a;}
+const DAYLAB=labels();
+
+const KIND_OF={ '晴':'sun','多云':'partly','阴':'cloud','小雨':'rain','阵雨':'rain','雷阵雨':'thunder','雪':'snow','雾':'fog' };
+
+const CITIES={
+  '北京':{adcode:'101010100',temp:24,feels:26,hi:28,lo:18,cond:'晴',kind:'sun',aqi:{v:32,t:'优'},
+    humidity:42,wind:'西北风 3 级',pressure:1012,vis:25,uv:'中等',sunrise:'05:12',sunset:'19:24',upd:'14:32',
+    week:['晴','晴','多云','阴','小雨','多云','晴']},
+  '上海':{adcode:'101020100',temp:21,feels:22,hi:24,lo:17,cond:'多云',kind:'partly',aqi:{v:58,t:'良'},
+    humidity:63,wind:'东北风 2 级',pressure:1015,vis:18,uv:'弱',sunrise:'05:43',sunset:'18:52',upd:'14:32',
+    week:['多云','小雨','阴','多云','晴','晴','多云']},
+  '广州':{adcode:'101280101',temp:29,feels:33,hi:32,lo:25,cond:'雷阵雨',kind:'thunder',aqi:{v:45,t:'优'},
+    humidity:81,wind:'东南风 3 级',pressure:1006,vis:12,uv:'强',sunrise:'06:02',sunset:'19:05',upd:'14:32',
+    week:['雷阵雨','阵雨','多云','雷阵雨','小雨','多云','晴']},
+  '成都':{adcode:'101270101',temp:18,feels:18,hi:21,lo:15,cond:'小雨',kind:'rain',aqi:{v:74,t:'良'},
+    humidity:88,wind:'微风',pressure:1018,vis:9,uv:'最弱',sunrise:'06:31',sunset:'19:12',upd:'14:32',
+    week:['小雨','阴','小雨','多云','阴','小雨','多云']},
+  '哈尔滨':{adcode:'101050101',temp:-9,feels:-14,hi:-4,lo:-15,cond:'雪',kind:'snow',aqi:{v:41,t:'优'},
+    humidity:70,wind:'西风 4 级',pressure:1026,vis:6,uv:'最弱',sunrise:'06:44',sunset:'16:41',upd:'14:32',
+    week:['雪','雪','多云','晴','晴','多云','雪']},
+  '三亚':{adcode:'101310201',temp:30,feels:35,hi:32,lo:26,cond:'晴',kind:'sun',aqi:{v:22,t:'优'},
+    humidity:72,wind:'东南风 3 级',pressure:1009,vis:30,uv:'很强',sunrise:'06:17',sunset:'18:38',upd:'14:32',
+    week:['晴','晴','多云','晴','雷阵雨','多云','晴']}
+};
+
+const state={city:'北京',override:null};
+
+/* ================= 工具 ================= */
+function aqiClass(v){ if(v<=50)return 'b-good'; if(v<=100)return 'b-mid'; return 'b-bad'; }
+function tempStr(n){ return (n>0?'':'')+n+'°'; }
+function weekdayFor(city){ return DAYLAB; }
+
+/* ================= 渲染 ================= */
+const deskCol=document.getElementById('deskCol');
+const deskExp=document.getElementById('deskExp');
+const pillEl=document.getElementById('pill');
+const elCityName=document.getElementById('cityName');
+const elUpd=document.getElementById('updTime');
+const elHero=document.getElementById('heroIcon');
+const elBigTemp=document.getElementById('bigTemp');
+const elCond=document.getElementById('condText');
+const elSub=document.getElementById('subline');
+const elAqi=document.getElementById('aqiBadge');
+const elUv=document.getElementById('uvBadge');
+const elWind=document.getElementById('windBadge');
+const elHourly=document.getElementById('hourly');
+const elDaily=document.getElementById('daily');
+const elDetails=document.getElementById('details');
+
+function render(){
+  const c=CITIES[state.city];
+  const cond=state.override?state.override.label:c.cond;
+  const kind=state.override?state.override.kind:c.kind;
+
+  elCityName.textContent=state.city;
+  elUpd.textContent=c.upd;
+  elBigTemp.textContent=c.temp;
+  elCond.textContent=cond;
+  elSub.textContent=`体感 ${c.feels}° · 最高 ${c.hi}° / 最低 ${c.lo}°`;
+  elAqi.className='badge '+aqiClass(c.aqi.v);
+  elAqi.textContent=`空气 ${c.aqi.t} ${c.aqi.v}`;
+  elUv.textContent='紫外线 '+c.uv;
+  elWind.textContent=c.wind;
+  elHero.innerHTML=icon(kind);
+
+  deskCol.className='desktop col cond-'+kind;
+  deskExp.className='desktop exp cond-'+kind;
+
+  /* 收起态胶囊 */
+  pillEl.innerHTML=`<div class="picon">${icon(kind)}</div>`
+    +`<div class="pcity">${state.city}</div>`
+    +`<div class="ptemp">${c.temp}°</div>`
+    +`<div class="pcond">${cond}</div>`
+    +`<div class="sep"></div><div class="dot"></div><div class="clock">${c.upd}</div>`;
+
+  /* 逐小时 */
+  const now=new Date(); const h0=now.getHours();
+  const delta=[0,-1,-1,-2,-3,-3,-2,-1,0,1,2,2];
+  const pk={sun:5,partly:15,cloud:25,rain:75,thunder:88,snow:60,fog:20,night:5};
+  let hh='';
+  for(let i=0;i<12;i++){
+    const t=c.temp+delta[i];
+    const lab=i===0?'现在':(((h0+i)%24))+'时';
+    hh+=`<div class="hour ${i===0?'now':''}">`
+      +`<div class="hh">${lab}</div>`
+      +`<div class="mini">${icon(i===0?kind:kind)}</div>`
+      +`<div class="ht">${t}°</div>`
+      +`<div class="hp">${pk[kind]||0}%</div></div>`;
+  }
+  elHourly.innerHTML=hh;
+
+  /* 7 天 */
+  const week=c.week.map((cnd,i)=>({cnd,kind:KIND_OF[cnd]||'sun',
+    hi:c.hi+[0,-1,1,0,-2,-1,1][i],lo:c.lo+[0,-2,0,1,-1,-2,0][i],
+    lab:DAYLAB[i].lab,date:DAYLAB[i].date}));
+  const loMin=Math.min(...week.map(d=>d.lo)), hiMax=Math.max(...week.map(d=>d.hi));
+  const span=Math.max(1,hiMax-loMin);
+  let dh='';
+  week.forEach(d=>{
+    const left=((d.lo-loMin)/span*100).toFixed(1);
+    const w=((d.hi-d.lo)/span*100).toFixed(1);
+    dh+=`<div class="drow">`
+      +`<div class="dday">${d.lab}<span>${d.date}</span></div>`
+      +`<div class="dicon">${icon(d.kind)}</div>`
+      +`<div class="dcond">${d.cnd}</div>`
+      +`<div class="drange"><span class="dfill" style="left:${left}%;width:${w}%"></span></div>`
+      +`<div class="dtemp"><b>${d.hi}°</b> / ${d.lo}°</div></div>`;
+  });
+  elDaily.innerHTML=dh;
+
+  /* 详情 */
+  const cards=[
+    ['湿度','💧',c.humidity,'%'],
+    ['风力','🌬',c.wind.replace(/ .*/,''),''],
+    ['气压','📊',c.pressure,'hPa'],
+    ['能见度','👁',c.vis,'km'],
+    ['日出','🌅',c.sunrise,''],
+    ['日落','🌇',c.sunset,''],
+    ['空气质量','🍃',c.aqi.t+' '+c.aqi.v,''],
+    ['紫外线','☀',c.uv,'']
+  ];
+  elDetails.innerHTML=cards.map(([lab,ic,val,unit])=>
+    `<div class="dcard"><div class="dlab"><span class="di">${ic}</span>${lab}</div>`
+    +`<div class="dval">${val}${unit?`<small>${unit}</small>`:''}</div></div>`).join('');
+
+  /* 高亮当前天气 chip */
+  document.querySelectorAll('#kindChips .chip').forEach(b=>b.classList.toggle('on', b.dataset.kind===kind && !!state.override));
+  document.getElementById('cityChip').textContent=state.city+' ▾';
+}
+
+/* ================= 城市下拉 ================= */
+const cityBtn=document.getElementById('cityBtn');
+const cityMenu=document.getElementById('cityMenu');
+function buildMenu(){
+  cityMenu.innerHTML=Object.keys(CITIES).map(name=>{
+    const c=CITIES[name];
+    return `<button data-city="${name}"><span>${name}</span><span class="mt">${c.temp}° ${c.cond}</span></button>`;
+  }).join('');
+  cityMenu.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    state.city=b.dataset.city; state.override=null;
+    cityMenu.classList.remove('open'); render();
+  }));
+}
+buildMenu();
+cityBtn.addEventListener('click',e=>{e.stopPropagation();cityMenu.classList.toggle('open');});
+document.addEventListener('click',()=>cityMenu.classList.remove('open'));
+
+/* 演示工具条的城市 chip 也打开下拉 */
+document.getElementById('cityChip').addEventListener('click',e=>{
+  e.stopPropagation();
+  // 打开面板里的城市菜单并滚动到展开态
+  cityMenu.classList.add('open');
+  document.getElementById('deskExp').scrollIntoView({behavior:'smooth',block:'center'});
+});
+
+/* ================= 天气动画 chip ================= */
+const KIND_LABEL={sun:'晴',partly:'多云',cloud:'阴',rain:'小雨',thunder:'雷阵雨',snow:'雪',fog:'雾',night:'晴'};
+document.querySelectorAll('#kindChips .chip').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const k=b.dataset.kind;
+    state.override={kind:k,label:KIND_LABEL[k]};
+    render();
+  });
+});
+
+/* ================= 左栏切模块 ================= */
+const wxPage=document.getElementById('wxPage');
+const tabPh=document.getElementById('tabPlaceholder');
+const ICONS={music:'♪',weather:'⛅',calendar:'▦',unread:'✉',settings:'⚙'};
+const NAMES={music:'音乐',weather:'天气',calendar:'日历',unread:'未读',settings:'设置'};
+document.querySelectorAll('.ritem').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const tab=b.dataset.tab;
+    document.querySelectorAll('.ritem').forEach(x=>x.classList.toggle('active',x===b));
+    if(tab==='weather'){ wxPage.style.display=''; tabPh.style.display='none'; }
+    else{
+      wxPage.style.display='none'; tabPh.style.display='flex';
+      document.getElementById('phIcon').textContent=ICONS[tab]||'◻';
+      document.getElementById('phText').textContent='「'+ (NAMES[tab]||'该') +'」模块原型未包含在此页面';
+    }
+  });
+});
+const qp=location.search?new URLSearchParams(location.search):new URLSearchParams('');
+if(qp.get('city')&&CITIES[qp.get('city')]) state.city=qp.get('city');
+if(qp.get('kind')&&KIND_LABEL[qp.get('kind')]) state.override={kind:qp.get('kind'),label:KIND_LABEL[qp.get('kind')]};
+
+render();
+</script>
+</body>
+</html>

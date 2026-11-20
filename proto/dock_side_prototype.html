@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WinIsle · 左右边缘吸附 · 原型</title>
+<style>
+  :root{
+    --ink:#e9edf3;--muted:#9aa4b2;--muted2:#6f7a89;
+    --line:rgba(255,255,255,.07);--accent:#2fd6a6;--accent2:#39c7ff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:#0b0e13;color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1160px;margin:0 auto;padding:40px 24px 74px;display:flex;flex-direction:column;gap:44px}
+
+  /* —— 头部：标题与说明紧贴成组 —— */
+  .head{display:flex;flex-direction:column;gap:7px}
+  .head h1{margin:0;font-size:20px;font-weight:700;letter-spacing:.2px}
+  .head p{margin:0;font-size:13px;color:var(--muted);line-height:1.7;max-width:760px}
+  .head .key{color:var(--accent)}
+
+  /* —— 每个区块：说明文字贴近所属画框 —— */
+  .section{display:flex;flex-direction:column;gap:14px}
+  .cap{font-size:13px;color:#8b96a6;letter-spacing:.2px}
+  .cap b{color:var(--ink);font-weight:600}
+
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+
+  /* —— 模拟桌面 —— */
+  .desk{position:relative;height:262px;border-radius:16px;overflow:hidden;
+    border:1px solid rgba(255,255,255,.07);
+    background:
+      radial-gradient(560px 210px at 50% -40%, rgba(57,199,255,.16), transparent 60%),
+      radial-gradient(560px 250px at 88% 125%, rgba(47,214,166,.11), transparent 60%),
+      linear-gradient(180deg,#141a24,#0c1016);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.02), inset 0 18px 40px rgba(0,0,0,.35)}
+  .desk::after{content:attr(data-tag);position:absolute;right:13px;bottom:10px;
+    font-size:11px;color:rgba(255,255,255,.15);letter-spacing:.3px}
+
+  /* —— 收起态：贴边横向胶囊（贴边两角直角、外侧两角圆角） —— */
+  .pill{position:absolute;top:50%;transform:translateY(-50%);
+    display:inline-flex;align-items:center;gap:10px;height:34px;width:356px;max-width:100%;
+    padding:0 14px;background:linear-gradient(180deg,#20262f,#171c24);
+    border:1px solid rgba(255,255,255,.08);
+    box-shadow:0 10px 26px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.045);
+    color:#9aa4b2;font-size:13.5px;overflow:hidden;
+    transition:transform .18s ease, box-shadow .18s ease}
+  .pill.left{left:0;border-radius:0 17px 17px 0;border-left:0}
+  .pill.right{right:0;border-radius:17px 0 0 17px;border-right:0}
+  .pill:hover{box-shadow:0 12px 30px rgba(0,0,0,.58), inset 0 1px 0 rgba(255,255,255,.06)}
+
+  .eq{display:inline-flex;align-items:flex-end;gap:2.5px;height:14px;flex:0 0 auto}
+  .eq i{width:2.5px;background:var(--accent);border-radius:2px;animation:eq 1s ease-in-out infinite}
+  .eq i:nth-child(2){animation-delay:.25s}
+  .eq i:nth-child(3){animation-delay:.5s}
+  @keyframes eq{0%,100%{height:4px}50%{height:14px}}
+
+  .marquee{overflow:hidden;white-space:nowrap;flex:1 1 0;min-width:0;text-align:center;
+    color:var(--accent);filter:drop-shadow(0 0 8px rgba(47,214,166,.35));
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 8px,#000 calc(100% - 8px),transparent)}
+  .marquee .run{display:inline-block;white-space:nowrap;animation:scrollx 11s linear infinite}
+  @keyframes scrollx{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+
+  .clock{font-variant-numeric:tabular-nums;font-weight:600;color:#dfe6ef;flex:0 0 auto;font-size:13.5px}
+
+  /* —— 展开态：从边缘向内滑出的面板（以右边缘为例，紧贴右边缘） —— */
+  .desk.exp{height:340px}
+  .panel{position:absolute;right:0;top:50%;transform:translateY(-50%);
+    width:474px;max-width:86%;height:268px;display:flex;align-items:stretch;
+    border-radius:22px 0 0 22px;border:1px solid rgba(255,255,255,.08);border-right:0;
+    background:linear-gradient(180deg,rgba(31,37,46,.98),rgba(21,26,33,.99));
+    box-shadow:-26px 0 60px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.04);
+    overflow:hidden;
+    transition:transform .22s ease, box-shadow .22s ease}
+  .panel:hover{transform:translateY(-50%) translateX(-4px)}
+
+  .content{flex:1 1 auto;min-width:0;padding:15px 15px 12px;display:flex;flex-direction:column}
+  .music{display:flex;gap:13px;align-items:center}
+  .disc{position:relative;width:112px;height:112px;flex:0 0 112px;border-radius:50%;
+    background:
+      radial-gradient(circle at 50% 50%, #0a0d12 0 26%, transparent 26.5%),
+      repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,.05) 0 1px, transparent 1px 4px),
+      radial-gradient(circle at 38% 32%, #3a4450, #0c1016 78%);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.07), inset 0 0 22px rgba(0,0,0,.6), 0 6px 18px rgba(0,0,0,.5)}
+  .disc::after{content:"";position:absolute;inset:30%;border-radius:50%;
+    background:radial-gradient(circle at 42% 36%, #ffe9a8, #7cc8f4 70%);opacity:.92}
+  .disc .hole{position:absolute;left:50%;top:50%;width:9px;height:9px;border-radius:50%;
+    background:#0a0d12;transform:translate(-50%,-50%);box-shadow:0 0 0 2px rgba(0,0,0,.5)}
+  .meta{flex:1 1 auto;min-width:0}
+  .title{font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub{font-size:11.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .progress{margin-top:9px}
+  .bar{position:relative;height:5px;border-radius:99px;background:rgba(255,255,255,.12)}
+  .fill{position:absolute;left:0;top:0;height:100%;width:38%;border-radius:99px;
+    background:linear-gradient(90deg,var(--accent2),var(--accent))}
+  .knob{position:absolute;top:50%;left:38%;width:11px;height:11px;border-radius:50%;background:#fff;
+    transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.5)}
+  .times{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted2);margin-top:5px;
+    font-variant-numeric:tabular-nums}
+  .controls{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .ctl{width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:#1a2028;
+    color:#cfd7e2;font-size:11px;display:flex;align-items:center;justify-content:center}
+  .ctl.play{width:36px;height:36px;background:linear-gradient(180deg,var(--accent),#22c295);
+    color:#052a20;border:0;font-size:14px;box-shadow:0 6px 16px rgba(47,214,166,.35)}
+  .lyrics{margin-top:10px;display:flex;flex-direction:column;align-items:center;gap:7px;text-align:center;
+    -webkit-mask-image:linear-gradient(180deg,transparent,#000 16%,#000 84%,transparent)}
+  .ln{font-size:12px;color:#59626f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .ln.cur{font-size:14.5px;font-weight:700;color:var(--accent);filter:drop-shadow(0 0 10px rgba(47,214,166,.35))}
+
+  .rail{width:64px;flex:0 0 64px;padding:11px 0;display:flex;flex-direction:column;align-items:center;gap:8px;
+    background:rgba(0,0,0,.22);border-left:1px solid var(--line)}
+  .ritem{width:46px;border:0;background:transparent;color:var(--muted2);border-radius:12px;padding:7px 0 5px;
+    display:flex;flex-direction:column;align-items:center;gap:3px;font-family:inherit;font-size:10px}
+  .ritem .rg{font-size:16px}
+  .ritem.active{color:#062a20;background:linear-gradient(180deg,var(--accent),#23c295);
+    box-shadow:0 6px 14px rgba(47,214,166,.3)}
+
+  .note{font-size:12px;color:var(--muted2);line-height:1.7}
+  .note code{background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:6px;padding:1px 6px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:#c7d0da}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <h1>WinIsle · 左右边缘吸附原型</h1>
+    <p>把灵动岛从「贴顶部居中」改为「贴住屏幕左 / 右边缘」。收起时是一枚<b>横向胶囊</b>，
+       贴住屏幕那一侧的两个角为<b>直角</b>（像从边缘长出），外侧两个角保持圆角；
+       鼠标移上去时向屏幕内侧滑出展开面板。尺寸、配色、频谱、歌词、时钟均沿用当前真实岛体。</p>
+  </div>
+
+  <div class="section">
+    <div class="cap"><b>① 收起态（吸附后静止的样子）</b> · 左边缘 / 右边缘</div>
+    <div class="row2">
+      <div class="desk" data-tag="模拟桌面 · 左边缘">
+        <div class="pill left">
+          <div class="eq"><i></i><i></i><i></i></div>
+          <div class="marquee"><span class="run">My lovin' baby　·　故事的小黄花 从出生那年就飘着　·　My lovin' baby　·　故事的小黄花 从出生那年就飘着　·　</span></div>
+          <div class="clock">17:16</div>
+        </div>
+      </div>
+      <div class="desk" data-tag="模拟桌面 · 右边缘">
+        <div class="pill right">
+          <div class="clock">17:16</div>
+          <div class="marquee"><span class="run">My lovin' baby　·　故事的小黄花 从出生那年就飘着　·　My lovin' baby　·　故事的小黄花 从出生那年就飘着　·　</span></div>
+          <div class="eq"><i></i><i></i><i></i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="cap"><b>② 悬停展开（以右边缘为例，向左内侧滑出；左边缘为镜像）</b></div>
+    <div class="desk exp" data-tag="模拟桌面 · 右边缘展开">
+      <div class="panel">
+        <div class="content">
+          <div class="music">
+            <div class="disc"><div class="hole"></div></div>
+            <div class="meta">
+              <div class="title">My lovin' baby</div>
+              <div class="sub">未知歌手 · 网易云音乐</div>
+              <div class="progress">
+                <div class="bar"><div class="fill"></div><div class="knob"></div></div>
+                <div class="times"><span>1:24</span><span>3:41</span></div>
+              </div>
+              <div class="controls">
+                <div class="ctl">⏮</div>
+                <div class="ctl play">⏸</div>
+                <div class="ctl">⏭</div>
+              </div>
+            </div>
+          </div>
+          <div class="lyrics">
+            <div class="ln">从前从前 有个人爱你很久</div>
+            <div class="ln cur">My lovin' baby 我好想再淋一遍</div>
+            <div class="ln">消失的下雨天 花落的那一天</div>
+          </div>
+        </div>
+        <div class="rail">
+          <div class="ritem active"><span class="rg">♪</span><span>音乐</span></div>
+          <div class="ritem"><span class="rg">☀</span><span>天气</span></div>
+          <div class="ritem"><span class="rg">▦</span><span>日历</span></div>
+          <div class="ritem"><span class="rg">✉</span><span>未读</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    说明：默认停在屏幕竖直方向居中的高度，可沿边缘上下拖动到任意高度并记住（配置键 <code>dock=left|right</code> + <code>y_frac</code>）。
+    如果你其实想要的是「仍贴顶部、只在左上 / 右上两个角吸附」，那是另一种做法，告诉我即可改。
+  </div>
+
+</div>
+</body>
+</html>

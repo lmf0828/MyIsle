@@ -63,6 +63,8 @@ const CB_EDGE: f32 = 5.0;
 /// 与相邻模块之间 5+5=10 的间距保持一致。
 const CB_OUTER_EXTRA: f32 = 5.0;
 const CB_GAP: f32 = 10.0;
+/// 收起态歌词字号（逻辑像素）。收起态固定此值、不读配置（配置 lyric_font 仅作用于展开态）。
+const LYRIC_COLLAPSED_PT: f32 = 12.0;
 /// 收起条最大宽度 = 目前展开后的宽度（用户指定）
 const CW_MAX: f32 = W_EXPANDED;
 const H_COLLAPSED: f32 = 30.0;
@@ -2812,7 +2814,7 @@ impl IslandApp {
         let cy = pill.center().y;
         let fg = egui::Color32::from_rgba_unmultiplied(238, 240, 246, a);
         let green = egui::Color32::from_rgba_unmultiplied(64, 214, 160, am);
-        let lyric_font = egui::FontId::proportional(14.0);
+        let lyric_font = egui::FontId::proportional(LYRIC_COLLAPSED_PT);
         let base_y = cy + painter.layout_no_wrap("音".to_owned(), lyric_font, fg).size().y * 0.5 - 3.0;
         let total: f32 = comps.iter().map(|(_, w)| *w).sum::<f32>()
             + {
@@ -3115,7 +3117,7 @@ impl IslandApp {
         let instrumental = lyrics::is_instrumental(&self.lyr_lines);
         let cur = if instrumental { None } else { self.cur_lyric_idx() };
         if instrumental {
-            self.draw_marquee(painter, text_rect, lyrics::INSTRUMENTAL_TEXT, egui::FontId::proportional(14.0), fg, t, false, self.cfg.edge_fade);
+            self.draw_marquee(painter, text_rect, lyrics::INSTRUMENTAL_TEXT, egui::FontId::proportional(LYRIC_COLLAPSED_PT), fg, t, false, self.cfg.edge_fade);
         } else if let Some(i) = cur {
             let line = self.lyr_lines[i].text.clone();
             let prog = self.line_progress(i);
@@ -3147,12 +3149,12 @@ impl IslandApp {
                     let ody = -lh * roll;
                     let oa = ((am as f32) * (1.0 - roll)).clamp(0.0, 255.0) as u8;
                     let obase = egui::Color32::from_rgba_unmultiplied(200, 205, 218, oa);
-                    self.draw_lyric_offset(painter, text_rect, text_rect, ody, ot, egui::FontId::proportional(14.0), obase, obase, 0.0, *olt, false, self.cfg.edge_fade);
+                    self.draw_lyric_offset(painter, text_rect, text_rect, ody, ot, egui::FontId::proportional(LYRIC_COLLAPSED_PT), obase, obase, 0.0, *olt, false, self.cfg.edge_fade);
                 }
                 let ndy = lh * (1.0 - roll);
-                self.draw_lyric_offset(painter, text_rect, text_rect, ndy, &line, egui::FontId::proportional(14.0), base, fill_green, prog, lt, false, self.cfg.edge_fade);
+                self.draw_lyric_offset(painter, text_rect, text_rect, ndy, &line, egui::FontId::proportional(LYRIC_COLLAPSED_PT), base, fill_green, prog, lt, false, self.cfg.edge_fade);
             } else {
-                self.draw_lyric_line(painter, text_rect, &line, egui::FontId::proportional(14.0), base, fill_green, prog, lt, false, self.cfg.edge_fade);
+                self.draw_lyric_line(painter, text_rect, &line, egui::FontId::proportional(LYRIC_COLLAPSED_PT), base, fill_green, prog, lt, false, self.cfg.edge_fade);
             }
         } else {
             let text = if self.music.title.is_empty() {
@@ -3162,7 +3164,7 @@ impl IslandApp {
             } else {
                 format!("{} · {}", self.music.title, self.music.artist)
             };
-            self.draw_marquee(painter, text_rect, &text, egui::FontId::proportional(14.0), fg, t, false, self.cfg.edge_fade);
+            self.draw_marquee(painter, text_rect, &text, egui::FontId::proportional(LYRIC_COLLAPSED_PT), fg, t, false, self.cfg.edge_fade);
         }
     }
 

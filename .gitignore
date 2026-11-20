@@ -23,3 +23,21 @@
 /docs/img
 *.log
 
+
+# local debug / temp artifacts (not committed)
+/data_t
+/WinIsle.old.exe
+/_*
+/*.py
+/*.txt
+/*.log
+/soda_*.png
+/base_main.rs
+/main_recovered.rs
+/src/main.corrupted.rs
+/scripts/_cap*.ps1
+/shot.ps1
+/click_*.ps1
+/loc_test.ps1
+/design/font_preview
+/design/esp32_img
