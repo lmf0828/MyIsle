@@ -861,6 +861,9 @@ struct IslandApp {
     ui_playing: bool,
     // 点击控制后的乐观状态，短时间内优先于 SMTC 快照，避免图标"闪回"或感觉迟钝
     override_play: Option<(bool, std::time::Instant)>,
+    /// 用户刚点了“暂停”、但播放器（汽水）尚未确认的时刻。用于在确认前冻结进度校正，
+    /// 防止暂停瞬间进度继续前冲、随后又弹回原位（表现为歌词“滚一下又回去”）。
+    pause_pending_at: Option<std::time::Instant>,
     /// 以 SMTC 真实 Position 为准的时间基准（播放器不给 position 时回退到 clock）
     spos: f64,
     spos_at: Instant,
@@ -946,6 +949,13 @@ struct IslandApp {
     spec_speed: f32,
     /// 频谱上一帧时间戳（用于按帧推进相位）
     spec_last_t: f64,
+    /// 水波频谱「未播放」形态的逐柱平滑高度（按归一化位置 0..127 索引）。
+    /// 与 water-reflection-test.html 的 fakeBins 一样做时间缓动，避免柱子直接跳目标值造成“掉帧感”。
+    wave_idle: [f32; 128],
+    /// 水波频谱「播放」形态的逐柱平滑显示高度（同上索引），对真实频段再做一次柔和。
+    wave_play: [f32; 128],
+    /// 播放/未播放两种形态的交叉淡入比例：0=未播放，1=播放，按时间平滑过渡，切换时不突然卡过去。
+    wave_mix: f32,
     /// 上一帧“提交结束”的时刻，用于把渲染循环限速到 60fps（该虚拟显示器 200Hz，vsync 会顶到 200fps）
     frame_last: Instant,
     /// 上一帧向事件循环申请的休眠毫秒数；用于自适应估算“每帧实际耗时(含绘制)”，
@@ -1142,6 +1152,7 @@ impl IslandApp {
             from_smtc: false,
             ui_playing: true,
             override_play: None,
+            pause_pending_at: None,
             spos: 0.0,
             spos_at: Instant::now(),
             spos_valid: false,
@@ -1191,6 +1202,9 @@ impl IslandApp {
             spec_phase: 0.0,
             spec_speed: 5.2,
             spec_last_t: 0.0,
+            wave_idle: [0.52; 128],
+            wave_play: [0.0; 128],
+            wave_mix: 0.0,
             frame_last: Instant::now() - Duration::from_millis(20),
             prev_req_ms: 16.0,
             intro_start: None,
@@ -2936,7 +2950,7 @@ impl IslandApp {
 
     /// 歌词底部「水面反射」频谱：上方一组频谱灯柱，下方是随波纹横向荡开的倒影，
     /// 中间一条发光地平线。无真实 FFT 时用多条正弦叠加出有呼吸感的伪频谱（低频更强 + 拍点脉冲）。
-    fn draw_water_reflection(&self, painter: &egui::Painter, rect: egui::Rect, fill_rect: egui::Rect, br: f32, accent: egui::Color32, a: u8, t: f64) {
+    fn draw_water_reflection(&mut self, painter: &egui::Painter, rect: egui::Rect, fill_rect: egui::Rect, br: f32, accent: egui::Color32, a: u8, t: f64) {
         if rect.width() < 30.0 || rect.height() < 18.0 || a == 0 {
             return;
         }
@@ -2962,13 +2976,35 @@ impl IslandApp {
             p.add(egui::Shape::mesh(m));
         };
 
-        // 底部水波区域不再铺任何深色底：直接沿用音乐内容区本身的底色，
-        // 频谱柱与倒影直接浮在同一背景上（与音乐区同色，没有黑色块）。
-        let _ = (br, accent);
+        // 底部水波区域沿用音乐内容区本身的底色；水面渐变在右下角按岛体圆角收边，
+        // 避免矩形填充把胶囊右下角涂成直角。
+        let _ = accent;
+        let br = br.max(0.0);
+        let right = fill_rect.right();
+        let bottom_y = fill_rect.bottom();
+        // 给定 y，返回圆角内允许的最右 x（只处理右下角 se 圆角）。
+        let max_x_at = |y: f32| -> f32 {
+            if br <= 0.5 || y <= bottom_y - br {
+                right
+            } else {
+                let dy = (y - (bottom_y - br)).clamp(0.0, br);
+                right - br + (br * br - dy * dy).max(0.0).sqrt()
+            }
+        };
+        // 给定 x，返回圆角内允许的最低 y。
+        let bottom_at = |x: f32| -> f32 {
+            if br <= 0.5 || x <= right - br {
+                bottom_y
+            } else {
+                let dx = (x - (right - br)).clamp(0.0, br);
+                bottom_y - br + (br * br - dx * dx).max(0.0).sqrt()
+            }
+        };
 
         let pad_x = 2.0f32;
         let x0 = fill_rect.left() + pad_x;
-        let x1 = fill_rect.right() - pad_x;
+        // 右端不留内边距：让最后一根柱子贴住面板右边缘，和左边起始位置视觉更平衡。
+        let x1 = fill_rect.right();
         // 地平线略下移（0.55→0.60），给上方灯柱更多生长空间；倒影仍在下方。
         let horizon = rect.top() + rect.height() * 0.60;
         let max_h = (horizon - (rect.top() - over) - 2.0).max(2.0);
@@ -2979,6 +3015,14 @@ impl IslandApp {
 
         let playing = self.is_playing();
         let tt = t as f32;
+        // 与 water-reflection-test.html 一致的时间缓动：未播放柱子逐帧向目标缓动（原来直接取目标值，
+        // 显示器上像素取整会让缓慢起伏变成“一顿一顿”的掉帧感）；播放/未播放两种形态再交叉淡入，
+        // 避免暂停↔播放切换时柱形突然卡过去。
+        let dt = painter.ctx().input(|i| i.stable_dt).clamp(0.001, 0.05);
+        let ease_idle = 1.0 - (-dt / 0.16).exp();
+        let ease_mix = 1.0 - (-dt / 0.24).exp();
+        self.wave_mix += ((if playing { 1.0 } else { 0.0 }) - self.wave_mix) * ease_mix;
+        let wave_mix = self.wave_mix.clamp(0.0, 1.0);
         // 稳定的整数哈希→[0,1)，用于每根柱子的随机相位/幅度与逐帧小抖动
         let hash01 = |mut x: u32| -> f32 {
             x ^= x >> 16;
@@ -3020,7 +3064,34 @@ impl IslandApp {
             )
         };
 
-        // 不再叠加水面深色渐变，保持与音乐内容区同色。
+        // 天空背光 + 水面底色：与 HTML 单效果版一致的蓝调氛围。
+        grad_rect(
+            &clip,
+            egui::Rect::from_min_max(egui::pos2(fill_rect.left(), rect.top()), egui::pos2(fill_rect.right(), horizon)),
+            egui::Color32::from_rgba_unmultiplied(8, 16, 34, 0),
+            egui::Color32::from_rgba_unmultiplied(14, 34, 64, (a as f32 * 0.32) as u8),
+        );
+        // 水面渐变：按列构造网格，底边沿右下圆角收口（右侧最后 br 像素逐步抬高）。
+        {
+            let top_c = egui::Color32::from_rgba_unmultiplied(10, 42, 74, (a as f32 * 0.58) as u8);
+            let bot_c = egui::Color32::from_rgba_unmultiplied(3, 10, 24, (a as f32 * 0.88) as u8);
+            let cols = ((fill_rect.width() / 6.0).ceil() as usize).max(2);
+            let mut m = egui::Mesh::default();
+            for k in 0..=cols {
+                let x = fill_rect.left() + fill_rect.width() * (k as f32 / cols as f32);
+                let yb = bottom_at(x);
+                m.vertices.push(egui::epaint::Vertex { pos: egui::pos2(x, horizon), uv, color: top_c });
+                m.vertices.push(egui::epaint::Vertex { pos: egui::pos2(x, yb.max(horizon)), uv, color: bot_c });
+            }
+            for k in 0..cols {
+                let i0 = (k * 2) as u32;
+                let i1 = i0 + 1;
+                let i2 = i0 + 2;
+                let i3 = i0 + 3;
+                m.indices.extend_from_slice(&[i0, i1, i2, i1, i3, i2]);
+            }
+            clip.add(egui::Shape::mesh(m));
+        }
 
         for i in 0..n {
             let f = i as f32 / (n as f32 - 1.0).max(1.0);
@@ -3028,14 +3099,20 @@ impl IslandApp {
             // “盆地”包络：中间压平、两端抬升。用幂函数 d^1.7 而非 smoothstep，
             // 让最外缘仍保留斜率、越靠边越能继续长高，不在两端形成一条齐平的顶线。
             let bowl = 0.18 + 1.06 * d.powf(1.7);
-            let beat = ((tt * 3.5).sin() * 0.5 + 0.5).powi(4);
+            let beat = ((tt * std::f32::consts::PI * (128.0 / 60.0) / 2.0).sin() * 0.5 + 0.5).powi(4);
             // 「未播放」的基础柱高（低频平滑起伏 + 极小固定随机 + 轻微拍点）
             let shape = 0.12 * (f * std::f32::consts::TAU * 1.0 + tt * 0.9).sin()
                 + 0.07 * (f * std::f32::consts::TAU * 2.0 - tt * 0.6).sin()
                 + 0.04 * (f * std::f32::consts::TAU * 3.5 + tt * 1.3).sin();
             let rnd = hash01((i as u32).wrapping_mul(2_654_435_761) ^ 0x9e37_79b9) * 2.0 - 1.0;
-            let idle_b = (0.50 + shape + 0.05 * rnd + 0.09 * beat).clamp(0.30, 0.80);
-            let vv = if playing {
+            let idle_target = (0.50 + shape + 0.05 * rnd + 0.09 * beat).clamp(0.30, 0.80);
+            // 按横向归一化位置索引平滑状态，展开动画里柱数变化也不会打乱状态。
+            let si = ((f * 127.0).round() as usize).min(127);
+            let prev_idle = self.wave_idle[si];
+            let idle_s = prev_idle + (idle_target - prev_idle) * ease_idle;
+            self.wave_idle[si] = idle_s;
+            let idle_v = (idle_s * bowl).clamp(0.0, 1.0);
+            let play_v = if playing {
                 // 以「未播放」的柱子为基底，叠加真实分频段能量做“泵动”：
                 // 不同歌曲/时刻高低不同；中间始终受盆形约束，不会向上盖到第五行歌词
                 let bands_now = crate::audio_meter::bands();
@@ -3049,7 +3126,7 @@ impl IslandApp {
                 let bandv = band.powf(0.72);
                 let flick = 0.97 + 0.06 * hash01((i as u32) ^ framef.wrapping_mul(2_654_435_761));
                 // 以真实频段为主（78%）、未播放柱形纹理为辅（22%），让重鼓能明显顶起来
-                let idle_n = ((idle_b - 0.30) / 0.50).clamp(0.0, 1.0);
+                let idle_n = ((idle_target - 0.30) / 0.50).clamp(0.0, 1.0);
                 let mix = 0.22 * idle_n + 0.78 * bandv;
                 let drive = 0.14 + 1.10 * mix; // 静音≈0.14，重鼓≈1.24
                 // 底鼓包络整体“泵动”：鼓点瞬间所有柱子一起抬升，鼓点间回落，抖动更明显
@@ -3057,14 +3134,22 @@ impl IslandApp {
                 let vr = bowl * drive * flick * (0.55 + 0.90 * kick);
                 let knee = 0.70f32;
                 let ceil = 0.96f32;
-                if vr <= knee {
+                let target = if vr <= knee {
                     vr
                 } else {
                     knee + (ceil - knee) * (1.0 - (-(vr - knee) / (ceil - knee) * 1.8).exp())
-                }
+                };
+                // 播放态直接取目标值：鼓点起音要“炸”，不能像空闲态那样慢慢追。
+                // 平滑只用于未播放形态和两态交叉淡入，避免把底鼓峰值削平。
+                self.wave_play[si] = target;
+                target
             } else {
-                (idle_b * bowl).clamp(0.0, 1.0)
+                // 暂停时让播放态内部值归到空闲形态，恢复播放时从当前空闲轮廓平滑起跳。
+                self.wave_play[si] = idle_v;
+                idle_v
             };
+            // 未播放↔播放交叉淡入：切换过程中柱形连续形变，而不是瞬间跳到另一套高度。
+            let vv = idle_v * (1.0 - wave_mix) + play_v * wave_mix;
             let v = vv.clamp(0.05, 0.99);
             let hgt = (v * max_h).max(1.5) + 5.0;
             let bx = x0 + i as f32 * (bw + gap);
@@ -3094,12 +3179,35 @@ impl IslandApp {
                 let ra = ((1.0 - depth) * 0.50 * (0.35 + 0.65 * v) * a as f32) as u8;
                 let rc = egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), ra.max(2));
                 let seg_h = refl_h / segs as f32 + 0.7;
-                clip.rect_filled(
-                    egui::Rect::from_min_size(egui::pos2(bx + off, yy), egui::vec2(bw, seg_h)),
-                    zero_r,
-                    rc,
-                );
+                let rx0 = bx + off;
+                let rx1 = (rx0 + bw).min(max_x_at((yy + seg_h).min(bottom_y)));
+                if rx1 > rx0 {
+                    clip.rect_filled(
+                        egui::Rect::from_min_size(egui::pos2(rx0, yy), egui::vec2(rx1 - rx0, seg_h)),
+                        zero_r,
+                        rc,
+                    );
+                }
             }
+        }
+
+        // 横向水面波纹光：与 HTML 一样在水面上叠几条极淡的起伏线，增加水的质感。
+        for s in 0..4 {
+            let yy = horizon + 5.0 + s as f32 * (refl_depth / 5.0);
+            let steps = (((x1 - x0) / 8.0).max(2.0)) as i32;
+            let mut pts = Vec::with_capacity((steps + 1) as usize);
+            for k in 0..=steps {
+                let x = x0 + k as f32 * 8.0;
+                let wy = yy + ((x * 0.03 + tt * 2.0 + s as f32).sin()) * 1.2;
+                if x <= max_x_at(wy) {
+                    pts.push(egui::pos2(x, wy));
+                }
+            }
+            let ca = ((a as f32) * (0.06 - s as f32 * 0.008)).max(0.0) as u8;
+            clip.add(egui::Shape::line(
+                pts,
+                egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(140, 225, 255, ca)),
+            ));
         }
 
         // 地平线：一条均匀的发光细线（不再突出中间某一段，避免中间显得更亮一条）
@@ -3874,10 +3982,17 @@ impl IslandApp {
                     self.clock_start = Instant::now();
                     self.clock_playing = want_play;
                     self.override_play = Some((want_play, Instant::now() + Duration::from_millis(1200)));
+                    // 把自维护时钟钉在当前显示位置：暂停时立即冻结，不会因 spos 采样滞后先回跳
+                    self.spos = cp;
+                    self.spos_at = Instant::now();
+                    self.spos_valid = true;
+                    // 记录“暂停请求待确认”，确认前不采纳仍在推进的播放器进度
+                    self.pause_pending_at = if want_play { None } else { Some(Instant::now()) };
                 }
                 _ => {
                     self.ui_playing = true;
                     self.override_play = Some((true, Instant::now() + Duration::from_millis(1200)));
+                    self.pause_pending_at = None;
                 }
             }
             // 指令分发：汽水优先用 CDP 直接点它的播放器按钮；SMTC 不可用时用系统多媒体键兜底。
@@ -3927,21 +4042,16 @@ impl IslandApp {
         let grid_top = vtop + (view_h - rows as f32 * row_h) * 0.5;
         let anchor = (rows - 1) as f32 * 0.5;
         let center_y = grid_top + anchor * row_h;
-        // 歌词底部：波纹频谱（水波反射）——先画在歌词之下，歌词完全不受影响
-        let water_target = self.cfg.water_spectrum;
-        let water_w = ui.ctx().animate_bool_with_time(ui.id().with("water_fade"), water_target, 0.20);
-        if water_w > 0.001 && water_w < 0.999 {
-            ui.ctx().request_repaint();
-        }
-        if water_w > 0.001 {
+        // 歌词底部：波纹频谱（水波反射）——先画在歌词之下，歌词完全不受影响。
+        // 开关是纯插拔式：设置里关闭后，再次打开音乐面板时直接不绘制，不再先做一次渐隐。
+        if self.cfg.water_spectrum {
             let wf_fill = egui::Rect::from_min_max(
                 egui::pos2(wf_rect.left(), wf_rect.top()),
                 egui::pos2(rect.right(), rect.bottom()),
             );
             let wf_r = self.cfg.radius.min(rect.height() * 0.5).min(rect.width() * 0.5);
             let wf_br = self.cfg.position.corner_radius(wf_r).se as f32;
-            let wa = (a as f32 * water_w).round().clamp(0.0, 255.0) as u8;
-            self.draw_water_reflection(painter, wf_rect, wf_fill, wf_br, green, wa, t);
+            self.draw_water_reflection(painter, wf_rect, wf_fill, wf_br, green, a, t);
         }
         if let Some(ci) = cur {
             // 仅用鼠标滚轮滚动歌词列表；悬停时显示手指光标
@@ -4027,7 +4137,10 @@ impl IslandApp {
                     self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), gdim, fill, pr, lt, false, false);
                 } else {
                     let fc = self.fade_lyric_color(faint, y, y + row_h, lyric_rect);
-                    self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), fc, fc, 0.0, t, false, false);
+                    // 非当前句的横向跑马灯也按“歌曲进度”驱动，而不是墙钟：暂停时自然停住，
+                    // 不会出现暂停后长句仍在横向滚动（“歌词自己又滚起来”）。
+                    let ilt = (self.lyric_time() - self.lyr_lines[i].t).max(0.0);
+                    self.draw_lyric_line(&clip, lrect, &self.lyr_lines[i].text, line_font.clone(), fc, fc, 0.0, ilt, false, false);
                 }
             }
         } else {
@@ -6456,6 +6569,7 @@ impl eframe::App for IslandApp {
                 self.media_title_cache = None;
                 self.last_title = None;
                 self.override_play = None;
+                self.pause_pending_at = None;
                 self.spos_valid = false;
                 self.clock_playing = false;
                 self.ui_playing = true;
@@ -6592,6 +6706,12 @@ impl eframe::App for IslandApp {
                     self.soda_prog_rx = None;
                     let prev_pl = self.soda_playing;
                     let mut force_sync = false;
+                    // 暂停请求后 3 秒内视作“待确认”：这段时间播放器进度可能仍在推进，
+                    // 若照常做软校正会先冲过头、等确认暂停再弹回（歌词“滚一下又回去”）。
+                    let pause_pending = self
+                        .pause_pending_at
+                        .map(|t| t.elapsed() < Duration::from_secs(3))
+                        .unwrap_or(false);
                     if let Some(p) = pl {
                         if prev_pl != Some(p) {
                             force_sync = true; // 播放/暂停切换时精确对齐一次
@@ -6612,6 +6732,9 @@ impl eframe::App for IslandApp {
                             self.spos = p;
                             self.spos_at = Instant::now();
                             self.spos_valid = true;
+                            self.pause_pending_at = None;
+                        } else if pause_pending {
+                            // 已请求暂停、播放器还没确认：保持当前位置不动，等确认后再精确对齐
                         } else if force_sync || diff.abs() > 2.0 {
                             // 播放态切换 / 拖动跳变：精确对齐一次
                             self.spos = p;
