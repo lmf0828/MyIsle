@@ -96,16 +96,6 @@
   /* tech strip */
   .tech{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px}
   .chip{border:1px solid var(--line2);background:var(--card);border-radius:999px;padding:8px 16px;font-size:13px;color:var(--muted)}
-  /* lightweight metrics */
-  .lw{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:22px}
-  .lw .it{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line2);border-radius:14px;padding:16px 18px;transition:border-color .2s,transform .2s}
-  .lw .it:hover{border-color:var(--teal);transform:translateY(-2px)}
-  .lw .n{font-size:27px;font-weight:800;color:var(--teal);line-height:1.05;letter-spacing:.3px}
-  .lw .n small{font-size:14px;font-weight:700;color:var(--teal2);margin-left:2px}
-  .lw .t{font-size:13px;color:var(--ink);font-weight:600;margin-top:7px}
-  .lw .d{font-size:12px;color:var(--muted2);margin-top:2px}
-  .lw-note{font-size:12px;color:var(--muted2);margin-top:12px}
-  @media(max-width:760px){.lw{grid-template-columns:repeat(2,1fr)}}
   .chip b{color:var(--ink);font-weight:700}
 
   /* download */
@@ -271,13 +261,6 @@
       <span class="chip"><b>tray-icon</b> 系统托盘</span>
       <span class="chip"><b>ureq</b> 网络 · 无 Electron</span>
     </div>
-    <div class="lw">
-      <div class="it"><div class="n">4<small>MB</small></div><div class="t">安装包体积</div><div class="d">便携版 3.99MB · 安装版 5.07MB</div></div>
-      <div class="it"><div class="n">≈40<small>MB</small></div><div class="t">常驻内存</div><div class="d">实测工作集，远低于 Electron 应用</div></div>
-      <div class="it"><div class="n">0<small>依赖</small></div><div class="t">运行时依赖</div><div class="d">无 Electron / WebView / .NET</div></div>
-      <div class="it"><div class="n">1<small>个文件</small></div><div class="t">便携即用</div><div class="d">解压双击，免安装可随身带</div></div>
-    </div>
-    <div class="lw-note">数据取自 v0.3.0 发布包与本机实测（Windows 10/11 x64）。</div>
   </div>
 </section>
 
